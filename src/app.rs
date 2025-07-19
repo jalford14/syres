@@ -3,7 +3,7 @@ use crate::ui;
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    widgets::ListState,
+    widgets::{ListState, ListItem},
 };
 
 const LOCATIONS: [&str; 5] = [
@@ -14,30 +14,41 @@ const LOCATIONS: [&str; 5] = [
     "Old Fourth Ward",
 ];
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViewState {
+    LocationSelection,
+    BookingForm,
+    Confirmation,
+}
+
 /// Application.
 #[derive(Debug)]
-pub struct App {
+pub struct App<'a> {
     /// Is the application running?
     pub running: bool,
     pub counter: u64,
-    pub locations: Vec<String>,
+    pub locations: Vec<ListItem<'a>>,
     pub events: EventHandler,
     pub list_state: ListState,
+    pub current_view: ViewState,
+    pub selected_location: Option<String>,
 }
 
-impl Default for App {
+impl Default for App<'_> {
     fn default() -> Self {
         Self {
             running: true,
             counter: 0,
-            locations: LOCATIONS.iter().map(|&s| s.to_string()).collect(),
+            locations: LOCATIONS.iter().map(|&s| ListItem::new(s.to_string())).collect(),
             events: EventHandler::new(),
             list_state: ListState::default().with_selected(Some(0)),
+            current_view: ViewState::LocationSelection,
+            selected_location: None,
         }
     }
 }
 
-impl App {
+impl App<'_> {
     /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
         Self::default()
@@ -71,11 +82,19 @@ impl App {
     /// Handles the key events and updates the state of [`App`].
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
+            KeyCode::Esc | KeyCode::Char('q') => {
+                match self.current_view {
+                    ViewState::LocationSelection => self.events.send(AppEvent::Quit),
+                    ViewState::BookingForm | ViewState::Confirmation => {
+                        self.current_view = ViewState::LocationSelection;
+                        self.selected_location = None;
+                    }
+                }
+            }
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 let selected = self.list_state.selected().unwrap_or(0);
                 let new_selected = if selected == 0 {
                     self.locations.len().saturating_sub(1)
@@ -84,7 +103,7 @@ impl App {
                 };
                 self.list_state.select(Some(new_selected));
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 let selected = self.list_state.selected().unwrap_or(0);
                 let new_selected = if selected >= self.locations.len().saturating_sub(1) {
                     0
@@ -92,6 +111,28 @@ impl App {
                     selected.saturating_add(1)
                 };
                 self.list_state.select(Some(new_selected));
+            }
+            KeyCode::Enter => {
+                match self.current_view {
+                    ViewState::LocationSelection => {
+                        if let Some(selected) = self.list_state.selected() {
+                            if selected < self.locations.len() {
+                                // Get the location name from the ListItem
+                                let location_name = LOCATIONS[selected];
+                                self.selected_location = Some(location_name.to_string());
+                                self.current_view = ViewState::BookingForm;
+                            }
+                        }
+                    }
+                    ViewState::BookingForm => {
+                        self.current_view = ViewState::Confirmation;
+                    }
+                    ViewState::Confirmation => {
+                        // Could reset to location selection or quit
+                        self.current_view = ViewState::LocationSelection;
+                        self.selected_location = None;
+                    }
+                }
             }
             // Other handlers you could add here.
             _ => {}
