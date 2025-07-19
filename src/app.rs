@@ -1,18 +1,28 @@
 use crate::event::{AppEvent, Event, EventHandler};
+use crate::ui;
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    widgets::ListState,
 };
+
+const LOCATIONS: [&str; 5] = [
+    "Decatur",
+    "Avondale",
+    "Kirkwood",
+    "Grant Park",
+    "Old Fourth Ward",
+];
 
 /// Application.
 #[derive(Debug)]
 pub struct App {
     /// Is the application running?
     pub running: bool,
-    /// Counter.
-    pub counter: u8,
-    /// Event handler.
+    pub counter: u64,
+    pub locations: Vec<String>,
     pub events: EventHandler,
+    pub list_state: ListState,
 }
 
 impl Default for App {
@@ -20,7 +30,12 @@ impl Default for App {
         Self {
             running: true,
             counter: 0,
+            locations: LOCATIONS
+                .iter()
+                .map(|&s| s.to_string())
+                .collect(),
             events: EventHandler::new(),
+            list_state: ListState::default().with_selected(Some(0)),
         }
     }
 }
@@ -34,7 +49,7 @@ impl App {
     /// Run the application's main loop.
     pub fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         while self.running {
-            terminal.draw(|frame| frame.render_widget(&self, frame.area()))?;
+            terminal.draw(|frame| self.render(frame))?;
             self.handle_events()?;
         }
         Ok(())
@@ -48,8 +63,8 @@ impl App {
                 _ => {}
             },
             Event::App(app_event) => match app_event {
-                AppEvent::Increment => self.increment_counter(),
-                AppEvent::Decrement => self.decrement_counter(),
+                AppEvent::Up => self.increment_counter(),
+                AppEvent::Down => self.decrement_counter(),
                 AppEvent::Quit => self.quit(),
             },
         }
@@ -63,8 +78,24 @@ impl App {
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
-            KeyCode::Right => self.events.send(AppEvent::Increment),
-            KeyCode::Left => self.events.send(AppEvent::Decrement),
+            KeyCode::Up => {
+                let selected = self.list_state.selected().unwrap_or(0);
+                let new_selected = if selected == 0 {
+                    self.locations.len().saturating_sub(1)
+                } else {
+                    selected.saturating_sub(1)
+                };
+                self.list_state.select(Some(new_selected));
+            }
+            KeyCode::Down => {
+                let selected = self.list_state.selected().unwrap_or(0);
+                let new_selected = if selected >= self.locations.len().saturating_sub(1) {
+                    0
+                } else {
+                    selected.saturating_add(1)
+                };
+                self.list_state.select(Some(new_selected));
+            }
             // Other handlers you could add here.
             _ => {}
         }
@@ -88,5 +119,10 @@ impl App {
 
     pub fn decrement_counter(&mut self) {
         self.counter = self.counter.saturating_sub(1);
+    }
+
+    /// Renders the user interface.
+    pub fn render(&mut self, frame: &mut ratatui::Frame) {
+        ui::render(self, frame);
     }
 }

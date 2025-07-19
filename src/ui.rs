@@ -1,39 +1,39 @@
 use ratatui::{
-    buffer::Buffer,
     layout::{Alignment, Rect},
     style::{Color, Stylize},
-    widgets::{Block, BorderType, Paragraph, Widget},
+    widgets::{Block, BorderType, List, ListState, Paragraph},
+    Frame,
 };
 
 use crate::app::App;
 
-impl Widget for &App {
-    /// Renders the user interface widgets.
-    ///
-    // This is where you add new widgets.
-    // See the following resources:
-    // - https://docs.rs/ratatui/latest/ratatui/widgets/index.html
-    // - https://github.com/ratatui/ratatui/tree/master/examples
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered()
-            .title("syres")
-            .title_alignment(Alignment::Center)
-            .border_type(BorderType::Rounded);
+/// Renders the user interface.
+pub fn render(app: &mut App, frame: &mut Frame) {
+    let locations_list = List::new(app.locations.iter().map(|s| s.to_string()))
+        .block(
+            Block::default()
+                .title("Locations")
+                .title_alignment(Alignment::Center)
+                .border_type(BorderType::Rounded),
+        )
+        .highlight_style(Color::Yellow)
+        .highlight_symbol(">> ");
 
-        let text = format!(
-            "This is a tui template.\n\
-                Press `Esc`, `Ctrl-C` or `q` to stop running.\n\
-                Press left and right to increment and decrement the counter respectively.\n\
-                Counter: {}",
-            self.counter
-        );
+    let block = Block::bordered()
+        .title("syres")
+        .title_alignment(Alignment::Center)
+        .border_type(BorderType::Rounded);
 
-        let paragraph = Paragraph::new(text)
-            .block(block)
-            .fg(Color::Cyan)
-            .bg(Color::Black)
-            .centered();
+    let text = format!(
+        "Make a booking at Switchyards"
+    );
 
-        paragraph.render(area, buf);
-    }
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .fg(Color::Blue)
+        .bg(Color::Black)
+        .centered();
+
+    frame.render_widget(paragraph, frame.area());
+    frame.render_stateful_widget(locations_list, frame.area(), &mut app.list_state);
 }
