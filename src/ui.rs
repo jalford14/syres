@@ -1,8 +1,8 @@
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Color, Stylize},
     widgets::{Block, BorderType, List, ListState, Paragraph},
-    Frame,
 };
 
 use crate::app::App;
@@ -24,9 +24,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded);
 
-    let text = format!(
-        "Make a booking at Switchyards"
-    );
+    let text = format!("Make a booking at Switchyards");
 
     let paragraph = Paragraph::new(text)
         .block(block)

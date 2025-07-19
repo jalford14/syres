@@ -30,10 +30,7 @@ impl Default for App {
         Self {
             running: true,
             counter: 0,
-            locations: LOCATIONS
-                .iter()
-                .map(|&s| s.to_string())
-                .collect(),
+            locations: LOCATIONS.iter().map(|&s| s.to_string()).collect(),
             events: EventHandler::new(),
             list_state: ListState::default().with_selected(Some(0)),
         }
