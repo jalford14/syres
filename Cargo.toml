@@ -10,3 +10,8 @@ edition = "2024"
 crossterm = "0.28.1"
 ratatui = "0.29.0"
 color-eyre = "0.6.3"
+reqwest = { version = "0.11", features = ["json", "cookies"] }
+scraper = "0.18"
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+serde_json = "1.0"

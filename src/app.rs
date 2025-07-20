@@ -1,5 +1,6 @@
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::ui;
+
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
@@ -32,6 +33,7 @@ pub struct App<'a> {
     pub list_state: ListState,
     pub current_view: ViewState,
     pub selected_location: Option<String>,
+    pub test_http: bool,
 }
 
 impl Default for App<'_> {
@@ -44,6 +46,7 @@ impl Default for App<'_> {
             list_state: ListState::default().with_selected(Some(0)),
             current_view: ViewState::LocationSelection,
             selected_location: None,
+            test_http: false,
         }
     }
 }
@@ -57,6 +60,14 @@ impl App<'_> {
     /// Run the application's main loop.
     pub fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         while self.running {
+            // Check if we need to test HTTP client
+            if self.test_http {
+                self.test_http = false;
+                if let Err(e) = self.test_http_client() {
+                    eprintln!("HTTP test failed: {:?}", e);
+                }
+            }
+            
             terminal.draw(|frame| self.render(frame))?;
             self.handle_events()?;
         }
@@ -93,6 +104,10 @@ impl App<'_> {
             }
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
+            }
+            KeyCode::Char('t') => {
+                // Set flag to test HTTP client
+                self.test_http = true;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let selected = self.list_state.selected().unwrap_or(0);
@@ -162,5 +177,44 @@ impl App<'_> {
     /// Renders the user interface.
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
         ui::render(self, frame);
+    }
+
+    /// Test the HTTP client functionality
+    pub fn test_http_client(&self) -> anyhow::Result<()> {
+        use crate::http_client::SkeddaClient;
+        
+        println!("Testing Skedda HTTP Client...");
+        
+        // Use tokio runtime to run async code
+        let rt = tokio::runtime::Runtime::new()?;
+        
+        rt.block_on(async {
+            // Create client
+            let client = SkeddaClient::new()?;
+            println!("✓ Client created successfully");
+            
+            // Get CSRF token
+            println!("Fetching booking page and extracting CSRF token...");
+            let csrf_token = client.get_booking_page().await?;
+            println!("✓ CSRF Token: {}", csrf_token);
+            
+            // Make authenticated request to /webs endpoint
+            println!("Making authenticated request to /webs endpoint...");
+            let webs_data = client.get_webs_data(&csrf_token).await?;
+            println!("✓ /webs JSON response: {}", serde_json::to_string_pretty(&webs_data)?);
+            
+            // Also test the booking page
+            println!("Making authenticated request to /booking...");
+            let response = client.authenticated_get("/booking", &csrf_token).await?;
+            println!("✓ /booking Response length: {} characters", response.len());
+            
+            // Debug cookies
+            println!("Checking cookies...");
+            let cookie_debug = client.get_cookies_debug().await?;
+            println!("✓ Cookie debug: {}", cookie_debug);
+            
+            println!("Test completed successfully!");
+            Ok::<(), anyhow::Error>(())
+        })
     }
 }
