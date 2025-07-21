@@ -46,6 +46,16 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
 }
 
 fn render_booking_form(app: &mut App, frame: &mut Frame) {
+    let spaces_list = List::new(app.selected_location_space_ids.clone())
+        .block(
+            Block::default()
+                .title("Spaces")
+                .title_alignment(Alignment::Center)
+                .border_type(BorderType::Rounded),
+        )
+        .highlight_style(Color::Yellow)
+        .highlight_symbol(">> ");
+
     let area = frame.area();
     
     // Create a centered popup area
@@ -74,6 +84,7 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
         .alignment(Alignment::Center);
     
     frame.render_widget(paragraph, popup_area);
+    frame.render_stateful_widget(spaces_list, popup_area, &mut app.list_state);
 }
 
 fn render_confirmation(app: &mut App, frame: &mut Frame) {

@@ -41,7 +41,7 @@ pub struct App<'a> {
     pub current_view: ViewState,
     pub selected_location: Option<String>,
     pub test_http: bool,
-    pub available_space_ids: Vec<String>,
+    pub selected_location_space_ids: Vec<String>,
 }
 
 impl Default for App<'_> {
@@ -55,7 +55,7 @@ impl Default for App<'_> {
             current_view: ViewState::LocationSelection,
             selected_location: None,
             test_http: false,
-            available_space_ids: Vec::new(),
+            selected_location_space_ids: Vec::new(),
         }
     }
 }
@@ -108,6 +108,7 @@ impl App<'_> {
                     ViewState::BookingForm | ViewState::Confirmation => {
                         self.current_view = ViewState::LocationSelection;
                         self.selected_location = None;
+                        self.selected_location_space_ids.clear();
                     }
                 }
             }
@@ -143,8 +144,8 @@ impl App<'_> {
                             if selected < self.locations.len() {
                                 // Get the location name from the ListItem
                                 let location_name = LOCATIONS[selected];
-                                println!("Selected location after ENTER: {}", location_name);
                                 self.selected_location = Some(location_name.to_string());
+                                let _ = self.test_http_client();
                                 self.current_view = ViewState::BookingForm;
                             }
                         }
@@ -193,19 +194,21 @@ impl App<'_> {
     pub fn test_http_client(&mut self) -> anyhow::Result<()> {
         use crate::skedda_client::SkeddaClient;
         
-        println!("Testing Skedda HTTP Client...");
-        
         let rt = tokio::runtime::Runtime::new()?;
         
         rt.block_on(async {
             // Create client
             let client = SkeddaClient::new()?;
             
-            // Make authenticated request to /webs endpoint
             //venue
             //mapsStructure
             //maps
             //id, name
+            
+            //spaces[]
+            //id
+            //so you can "zip" the spaceIds from venue with ids you get from spaces
+            // doing that will give you the name and info
 
             //venue
             //spaceTags
@@ -218,24 +221,20 @@ impl App<'_> {
             if let serde_json::Value::Array(items) = webs_response {
                 for item in items {
                     if let serde_json::Value::Object(obj) = item {
-                        println!("selected location: {:?}", self.selected_location);
                         if self.selected_location == obj.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                            println!("FOUND location: {:?}", self.selected_location);
-                            println!("Space Tag IDs: {:?}", obj.get("spaceIds"));
-                            self.available_space_ids = obj.get("spaceIds")
-                                .and_then(|v| v.as_array())
-                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<String>>())
-                                .unwrap_or_default();
+                            if let Some(serde_json::Value::Array(space_ids)) = obj.get("spaceIds") {
+                                self.selected_location_space_ids = space_ids
+                                    .iter()
+                                    .filter_map(|v| v.as_i64())
+                                    .map(|n| n.to_string())    
+                                    .collect();
+                            }
                         }
                     }
                 } 
             } else {
                     println!("Unexpected response format: {:?}", webs_response);
             }
-            println!("✓ /webs JSON response: {}", webs_response);
-            //println!("✓ /webs JSON response: {}", serde_json::to_string_pretty(&webs_data["venue"][0]["spacePresentation"]["spaceTags"])?);
-            
-            println!("Test completed successfully!");
             Ok::<(), anyhow::Error>(())
         })
     }
