@@ -7,12 +7,19 @@ use ratatui::{
     widgets::{ListState, ListItem},
 };
 
-const LOCATIONS: [&str; 5] = [
+const LOCATIONS: [&str; 12] = [
+    "Adair Park",
+    "Avondale Estates",
+    "Buckhead",
+    "Cabbagetown",
+    "Chamblee",
     "Decatur",
-    "Avondale",
-    "Kirkwood",
-    "Grant Park",
+    "Downtown",
+    "Midtown",
     "Old Fourth Ward",
+    "Roswell",
+    "Virginia-Highland",
+    "Westside",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +41,7 @@ pub struct App<'a> {
     pub current_view: ViewState,
     pub selected_location: Option<String>,
     pub test_http: bool,
+    pub available_space_ids: Vec<String>,
 }
 
 impl Default for App<'_> {
@@ -47,6 +55,7 @@ impl Default for App<'_> {
             current_view: ViewState::LocationSelection,
             selected_location: None,
             test_http: false,
+            available_space_ids: Vec::new(),
         }
     }
 }
@@ -134,6 +143,7 @@ impl App<'_> {
                             if selected < self.locations.len() {
                                 // Get the location name from the ListItem
                                 let location_name = LOCATIONS[selected];
+                                println!("Selected location after ENTER: {}", location_name);
                                 self.selected_location = Some(location_name.to_string());
                                 self.current_view = ViewState::BookingForm;
                             }
@@ -180,38 +190,50 @@ impl App<'_> {
     }
 
     /// Test the HTTP client functionality
-    pub fn test_http_client(&self) -> anyhow::Result<()> {
-        use crate::http_client::SkeddaClient;
+    pub fn test_http_client(&mut self) -> anyhow::Result<()> {
+        use crate::skedda_client::SkeddaClient;
         
         println!("Testing Skedda HTTP Client...");
         
-        // Use tokio runtime to run async code
         let rt = tokio::runtime::Runtime::new()?;
         
         rt.block_on(async {
             // Create client
             let client = SkeddaClient::new()?;
-            println!("✓ Client created successfully");
-            
-            // Get CSRF token
-            println!("Fetching booking page and extracting CSRF token...");
-            let csrf_token = client.get_booking_page().await?;
-            println!("✓ CSRF Token: {}", csrf_token);
             
             // Make authenticated request to /webs endpoint
-            println!("Making authenticated request to /webs endpoint...");
-            let webs_data = client.get_webs_data(&csrf_token).await?;
-            println!("✓ /webs JSON response: {}", serde_json::to_string_pretty(&webs_data)?);
-            
-            // Also test the booking page
-            println!("Making authenticated request to /booking...");
-            let response = client.authenticated_get("/booking", &csrf_token).await?;
-            println!("✓ /booking Response length: {} characters", response.len());
-            
-            // Debug cookies
-            println!("Checking cookies...");
-            let cookie_debug = client.get_cookies_debug().await?;
-            println!("✓ Cookie debug: {}", cookie_debug);
+            //venue
+            //mapsStructure
+            //maps
+            //id, name
+
+            //venue
+            //spaceTags
+            let webs_data = client.get_booking_data().await?;
+            // s.Book(domain, venue.ID, spaceIDs, title, from, till)
+            // domain: "switchyards.skedda.com"
+            // venue.ID: webs_data["venue"][0]["id"]
+            // venue.ID: webs_data["venue"][0]["id"]
+            let webs_response = &webs_data["venue"][0]["spacePresentation"]["spaceTags"];
+            if let serde_json::Value::Array(items) = webs_response {
+                for item in items {
+                    if let serde_json::Value::Object(obj) = item {
+                        println!("selected location: {:?}", self.selected_location);
+                        if self.selected_location == obj.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                            println!("FOUND location: {:?}", self.selected_location);
+                            println!("Space Tag IDs: {:?}", obj.get("spaceIds"));
+                            self.available_space_ids = obj.get("spaceIds")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<String>>())
+                                .unwrap_or_default();
+                        }
+                    }
+                } 
+            } else {
+                    println!("Unexpected response format: {:?}", webs_response);
+            }
+            println!("✓ /webs JSON response: {}", webs_response);
+            //println!("✓ /webs JSON response: {}", serde_json::to_string_pretty(&webs_data["venue"][0]["spacePresentation"]["spaceTags"])?);
             
             println!("Test completed successfully!");
             Ok::<(), anyhow::Error>(())
