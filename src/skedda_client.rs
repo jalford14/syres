@@ -64,11 +64,7 @@ impl SkeddaClient {
         Err(anyhow::anyhow!("CSRF token not found in HTML content"))
     }
 
-    /// Gets booking data from the /webs endpoint
-    /// This method:
-    /// 1. First gets the booking page to establish session and get CSRF token
-    /// 2. Then makes a request to /webs with the CSRF token
-    /// 3. Cookies are automatically handled by reqwest's cookie store
+    // TODO: Need to auth and then add the cookies to the jar
     pub async fn get_booking_data(&self) -> Result<serde_json::Value> {
         // Step 1: Get the booking page to establish session and get CSRF token
         let csrf_token = self.get_booking_page().await?;

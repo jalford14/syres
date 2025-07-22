@@ -46,7 +46,9 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
 }
 
 fn render_booking_form(app: &mut App, frame: &mut Frame) {
-    let spaces_list = List::new(app.selected_location_space_ids.clone())
+    let spaces_list = List::new(
+        app.selected_location_space_ids.clone().into_iter().map(|space_id| app.venue_space_ids.get(&space_id).unwrap().to_string())
+    )
         .block(
             Block::default()
                 .title("Spaces")

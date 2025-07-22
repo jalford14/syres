@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::ui;
 
@@ -42,6 +44,7 @@ pub struct App<'a> {
     pub selected_location: Option<String>,
     pub test_http: bool,
     pub selected_location_space_ids: Vec<String>,
+    pub venue_space_ids: HashMap<String, String>,
 }
 
 impl Default for App<'_> {
@@ -56,6 +59,7 @@ impl Default for App<'_> {
             selected_location: None,
             test_http: false,
             selected_location_space_ids: Vec::new(),
+            venue_space_ids: HashMap::new(),
         }
     }
 }
@@ -213,6 +217,18 @@ impl App<'_> {
             //venue
             //spaceTags
             let webs_data = client.get_booking_data().await?;
+            if let serde_json::Value::Array(items) = &webs_data["spaces"] {
+                for item in items {
+                    if let (Some(id), Some(name)) = (
+                        item.get("id").and_then(serde_json::Value::as_str),
+                        item.get("name").and_then(serde_json::Value::as_str),
+                    ) {
+                        self.venue_space_ids.insert(id.to_string(), name.to_string());
+                    }
+                }
+            }
+            println!("venue space ids: {:?}", self.venue_space_ids);
+            println!("venue space ids: {:?}", &webs_data["venue"][0]["spaces"]);
             // s.Book(domain, venue.ID, spaceIDs, title, from, till)
             // domain: "switchyards.skedda.com"
             // venue.ID: webs_data["venue"][0]["id"]
