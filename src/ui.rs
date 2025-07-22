@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect, Layout, Direction, Constraint},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Stylize},
-    widgets::{Block, BorderType, List, Paragraph, Clear},
-    text::{Text, Line},
+    text::{Line, Text},
+    widgets::{Block, BorderType, Clear, List, Paragraph},
 };
 
 use crate::app::{App, ViewState};
@@ -47,32 +47,40 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
 
 fn render_booking_form(app: &mut App, frame: &mut Frame) {
     let spaces_list = List::new(
-        app.selected_location_space_ids.clone().into_iter().map(|space_id| app.venue_space_ids.get(&space_id).unwrap().to_string())
+        app.selected_location_space_ids
+            .clone()
+            .into_iter()
+            .map(|space_id| app.venue_space_ids.get(&space_id).unwrap().to_string()),
     )
-        .block(
-            Block::default()
-                .title("Spaces")
-                .title_alignment(Alignment::Center)
-                .border_type(BorderType::Rounded),
-        )
-        .highlight_style(Color::Yellow)
-        .highlight_symbol(">> ");
+    .block(
+        Block::default()
+            .title("Spaces")
+            .title_alignment(Alignment::Center)
+            .border_type(BorderType::Rounded),
+    )
+    .highlight_style(Color::Yellow)
+    .highlight_symbol(">> ");
 
     let area = frame.area();
-    
+
     // Create a centered popup area
     let popup_area = centered_rect(60, 40, area);
-    
+
     // Clear the background
     frame.render_widget(Clear, popup_area);
-    
-    let title = format!("Booking Form - {}", app.selected_location.as_ref().unwrap_or(&"Unknown".to_string()));
-    
+
+    let title = format!(
+        "Booking Form - {}",
+        app.selected_location
+            .as_ref()
+            .unwrap_or(&"Unknown".to_string())
+    );
+
     let block = Block::bordered()
         .title(title)
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded);
-    
+
     let content = vec![
         Line::from(""),
         Line::from("Booking details will go here..."),
@@ -80,11 +88,11 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
         Line::from("Press Enter to confirm booking"),
         Line::from("Press Esc to go back"),
     ];
-    
+
     let paragraph = Paragraph::new(Text::from(content))
         .block(block)
         .alignment(Alignment::Center);
-    
+
     frame.render_widget(paragraph, popup_area);
     frame.render_stateful_widget(spaces_list, popup_area, &mut app.list_state);
 }
@@ -92,26 +100,30 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
 fn render_confirmation(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
     let popup_area = centered_rect(50, 30, area);
-    
+
     frame.render_widget(Clear, popup_area);
-    
+
     let block = Block::bordered()
         .title("Booking Confirmed!")
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded);
-    
+
     let content = vec![
         Line::from(""),
-        Line::from(format!("Your booking at {} has been confirmed!", 
-            app.selected_location.as_ref().unwrap_or(&"Unknown".to_string()))),
+        Line::from(format!(
+            "Your booking at {} has been confirmed!",
+            app.selected_location
+                .as_ref()
+                .unwrap_or(&"Unknown".to_string())
+        )),
         Line::from(""),
         Line::from("Press Esc to return to location selection"),
     ];
-    
+
     let paragraph = Paragraph::new(Text::from(content))
         .block(block)
         .alignment(Alignment::Center);
-    
+
     frame.render_widget(paragraph, popup_area);
 }
 

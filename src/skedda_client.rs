@@ -1,6 +1,9 @@
-use reqwest::{Client, header::{HeaderMap, HeaderValue}};
+use anyhow::{Context, Result};
+use reqwest::{
+    Client,
+    header::{HeaderMap, HeaderValue},
+};
 use scraper::{Html, Selector};
-use anyhow::{Result, Context};
 
 pub struct SkeddaClient {
     client: Client,
@@ -24,8 +27,9 @@ impl SkeddaClient {
     /// This establishes the session and cookies automatically via reqwest's cookie store
     pub async fn get_booking_page(&self) -> Result<String> {
         let url = format!("{}/booking", self.base_url);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(&url)
             .send()
             .await
@@ -45,11 +49,9 @@ impl SkeddaClient {
     /// Extracts the CSRF token from HTML content
     fn extract_csrf_token(&self, html_content: &str) -> Result<String> {
         let document = Html::parse_document(html_content);
-        
+
         // Try multiple selectors to find the CSRF token
-        let selectors = [
-            "input[name='__RequestVerificationToken']",
-        ];
+        let selectors = ["input[name='__RequestVerificationToken']"];
 
         for selector_str in &selectors {
             if let Ok(selector) = Selector::parse(selector_str) {
@@ -73,20 +75,18 @@ impl SkeddaClient {
         // Step 2: Make request to /webs with CSRF token
         // Cookies are automatically included by reqwest's cookie store
         let url = format!("{}/webs", self.base_url);
-        
+
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-Skedda-RequestVerificationToken",
-            HeaderValue::from_str(&csrf_token)?
+            HeaderValue::from_str(&csrf_token)?,
         );
-        headers.insert(
-            "Accept",
-            HeaderValue::from_str("application/json")?
-        );
+        headers.insert("Accept", HeaderValue::from_str("application/json")?);
 
         println!("Making request to: {}", url);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .headers(headers)
             .send()

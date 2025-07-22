@@ -6,7 +6,7 @@ use crate::ui;
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    widgets::{ListState, ListItem},
+    widgets::{ListItem, ListState},
 };
 
 const LOCATIONS: [&str; 12] = [
@@ -52,7 +52,10 @@ impl Default for App<'_> {
         Self {
             running: true,
             counter: 0,
-            locations: LOCATIONS.iter().map(|&s| ListItem::new(s.to_string())).collect(),
+            locations: LOCATIONS
+                .iter()
+                .map(|&s| ListItem::new(s.to_string()))
+                .collect(),
             events: EventHandler::new(),
             list_state: ListState::default().with_selected(Some(0)),
             current_view: ViewState::LocationSelection,
@@ -80,7 +83,7 @@ impl App<'_> {
                     eprintln!("HTTP test failed: {:?}", e);
                 }
             }
-            
+
             terminal.draw(|frame| self.render(frame))?;
             self.handle_events()?;
         }
@@ -106,16 +109,14 @@ impl App<'_> {
     /// Handles the key events and updates the state of [`App`].
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                match self.current_view {
-                    ViewState::LocationSelection => self.events.send(AppEvent::Quit),
-                    ViewState::BookingForm | ViewState::Confirmation => {
-                        self.current_view = ViewState::LocationSelection;
-                        self.selected_location = None;
-                        self.selected_location_space_ids.clear();
-                    }
+            KeyCode::Esc | KeyCode::Char('q') => match self.current_view {
+                ViewState::LocationSelection => self.events.send(AppEvent::Quit),
+                ViewState::BookingForm | ViewState::Confirmation => {
+                    self.current_view = ViewState::LocationSelection;
+                    self.selected_location = None;
+                    self.selected_location_space_ids.clear();
                 }
-            }
+            },
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
             }
@@ -197,18 +198,18 @@ impl App<'_> {
     /// Test the HTTP client functionality
     pub fn test_http_client(&mut self) -> anyhow::Result<()> {
         use crate::skedda_client::SkeddaClient;
-        
+
         let rt = tokio::runtime::Runtime::new()?;
-        
+
         rt.block_on(async {
             // Create client
             let client = SkeddaClient::new()?;
-            
+
             //venue
             //mapsStructure
             //maps
             //id, name
-            
+
             //spaces[]
             //id
             //so you can "zip" the spaceIds from venue with ids you get from spaces
@@ -223,7 +224,8 @@ impl App<'_> {
                         item.get("id").and_then(serde_json::Value::as_str),
                         item.get("name").and_then(serde_json::Value::as_str),
                     ) {
-                        self.venue_space_ids.insert(id.to_string(), name.to_string());
+                        self.venue_space_ids
+                            .insert(id.to_string(), name.to_string());
                     }
                 }
             }
@@ -237,19 +239,24 @@ impl App<'_> {
             if let serde_json::Value::Array(items) = webs_response {
                 for item in items {
                     if let serde_json::Value::Object(obj) = item {
-                        if self.selected_location == obj.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                        if self.selected_location
+                            == obj
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        {
                             if let Some(serde_json::Value::Array(space_ids)) = obj.get("spaceIds") {
                                 self.selected_location_space_ids = space_ids
                                     .iter()
                                     .filter_map(|v| v.as_i64())
-                                    .map(|n| n.to_string())    
+                                    .map(|n| n.to_string())
                                     .collect();
                             }
                         }
                     }
-                } 
+                }
             } else {
-                    println!("Unexpected response format: {:?}", webs_response);
+                println!("Unexpected response format: {:?}", webs_response);
             }
             Ok::<(), anyhow::Error>(())
         })
