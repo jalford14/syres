@@ -2,7 +2,7 @@ use crate::app::App;
 
 pub mod app;
 pub mod event;
-pub mod skedda_client;
+pub mod skedda;
 pub mod ui;
 
 fn main() -> color_eyre::Result<()> {
