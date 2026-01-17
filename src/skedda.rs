@@ -5,6 +5,8 @@ use reqwest::{
 };
 use scraper::{Html, Selector};
 use std::collections::HashMap;
+use std::env;
+use std::fs;
 
 pub struct Skedda {
     client: Client,
@@ -51,6 +53,13 @@ impl Skedda {
             .json::<serde_json::Value>()
             .context("Failed to parse JSON response from /webs")?;
 
+        // Dump /webs response for debugging when SYRES_DEBUG_WEBS=1
+        if env::var("SYRES_DEBUG_WEBS").is_ok() {
+            if let Ok(s) = serde_json::to_string_pretty(&response_json) {
+                let _ = fs::write("webs_debug.json", s);
+            }
+        }
+
         Ok(response_json)
     }
 
@@ -87,47 +96,118 @@ impl Skedda {
         Err(anyhow::anyhow!("CSRF token not found in HTML content"))
     }
 
-    pub fn fetch_space_ids(&self) -> HashMap<String, String> {
+    /// Extract a string ID from a JSON value (handles both string and number).
+    fn id_from_value(v: &serde_json::Value) -> Option<String> {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+    }
+
+    pub fn fetch_space_ids(&mut self) -> HashMap<String, String> {
         let mut venue_space_ids = HashMap::new();
         let webs_data = self.get_booking_data().unwrap();
 
-        if let serde_json::Value::Array(items) = &webs_data["spaces"] {
+        // Top-level "spaces" array: add only leaf spaces (skip items with "spaceIds",
+        // which are venue/parent objects). IDs can be string or number in JSON.
+        if let Some(items) = webs_data["spaces"].as_array() {
             for item in items {
-                if let (Some(id), Some(name)) = (
-                    item.get("id").and_then(serde_json::Value::as_str),
-                    item.get("name").and_then(serde_json::Value::as_str),
-                ) {
-                    venue_space_ids.insert(id.to_string(), name.to_string());
+                if item.get("spaceIds").is_some() {
+                    continue; // venue/parent, not a bookable space
+                }
+                let id = item.get("id").and_then(Self::id_from_value);
+                let name = item.get("name").and_then(serde_json::Value::as_str).map(String::from);
+                if let (Some(id), Some(name)) = (id, name) {
+                    venue_space_ids.insert(id, name);
                 }
             }
         }
 
-        return venue_space_ids;
-    }
-
-    pub fn fetch_location_space_ids(&self, selected_location: &str) -> Vec<String> {
-        let webs_data = self.get_booking_data();
-        let webs_response = &webs_data["venue"][0]["spacePresentation"]["spaceTags"];
-
-        if let serde_json::Value::Array(items) = &webs_data["spaces"] {
-            for item in items {
-                if let serde_json::Value::Object(obj) = item {
-                    if selected_location
-                    == obj.unwrap()
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                    {
-                        if let Some(serde_json::Value::Array(space_ids)) = obj.get("spaceIds") {
-                            return space_ids
-                                .iter()
-                                .filter_map(|v| v.as_i64())
-                                .map(|n| n.to_string())
-                                .collect();
+        // Venue-specific "spaces": some APIs nest spaces under venue["spaces"].
+        if let Some(venues) = webs_data["venue"].as_array() {
+            for venue in venues {
+                if let Some(spaces) = venue["spaces"].as_array() {
+                    for sp in spaces {
+                        let id = sp.get("id").and_then(Self::id_from_value);
+                        let name = sp.get("name").and_then(serde_json::Value::as_str).map(String::from);
+                        if let (Some(id), Some(name)) = (id, name) {
+                            venue_space_ids.insert(id, name);
                         }
                     }
                 }
             }
         }
+
+        self.venue_space_ids = venue_space_ids.clone();
+        venue_space_ids
+    }
+
+    /// Extract space IDs from a JSON array (handles both numeric and string IDs).
+    fn space_ids_from_array(arr: &[serde_json::Value]) -> Vec<String> {
+        arr.iter()
+            .filter_map(Self::id_from_value)
+            .collect()
+    }
+
+    pub fn fetch_location_space_ids(&self, selected_location: &str) -> Vec<String> {
+        let webs_data = self.get_booking_data().unwrap();
+
+        // Normalize "Virginia-Highland" -> "Virginia Highland" to match Skedda's spaceTags.
+        let name_to_match = selected_location.replace('-', " ");
+
+        // 1) Primary: venue[0].spacePresentation.spaceTags — each tag has "name" (location)
+        //    and "spaceIds" (array of space IDs). This is the canonical structure for
+        //    Switchyards/Skedda.
+        if let Some(venues) = webs_data["venue"].as_array() {
+            if let Some(venue0) = venues.first() {
+                if let Some(space_tags) = venue0["spacePresentation"]["spaceTags"].as_array() {
+                    for tag in space_tags {
+                        if tag["name"].as_str() == Some(name_to_match.as_str()) {
+                            if let Some(ids) = tag["spaceIds"].as_array() {
+                                return Self::space_ids_from_array(ids);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) Fallback: venue array with venue["name"] match, or venue["spaceIds"] / venue["spaces"].
+        if let Some(venues) = webs_data["venue"].as_array() {
+            for venue in venues {
+                if venue["name"].as_str() != Some(selected_location) {
+                    continue;
+                }
+                if let Some(ids) = venue["spaceIds"].as_array() {
+                    return Self::space_ids_from_array(ids);
+                }
+                if let Some(spaces) = venue["spaces"].as_array() {
+                    let ids: Vec<String> = spaces
+                        .iter()
+                        .filter_map(|s| {
+                            s.get("id")
+                                .and_then(Self::id_from_value)
+                                .or_else(|| Self::id_from_value(s))
+                        })
+                        .collect();
+                    if !ids.is_empty() {
+                        return ids;
+                    }
+                }
+            }
+        }
+
+        // 3) Fallback: top-level "spaces" array, item with name == location and "spaceIds".
+        if let Some(items) = webs_data["spaces"].as_array() {
+            for item in items {
+                if item["name"].as_str() != Some(selected_location) {
+                    continue;
+                }
+                if let Some(ids) = item["spaceIds"].as_array() {
+                    return Self::space_ids_from_array(ids);
+                }
+            }
+        }
+
+        Vec::new()
     }
 }

@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, List, Paragraph},
 };
 
-use crate::{app::{App, ViewState}, skedda::Skedda};
+use crate::app::{App, ViewState};
 
 /// Renders the user interface.
 pub fn render(app: &mut App, frame: &mut Frame) {
@@ -46,12 +46,16 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
 }
 
 fn render_booking_form(app: &mut App, frame: &mut Frame) {
-    let skedda = Skedda::new();
     let spaces_list = List::new(
-        skedda.fetch_space_ids(skedda, app.selected_location)
-            .clone()
-            .into_iter()
-            .map(|space_id| app.venue_space_ids.get(&space_id).unwrap().to_string()),
+        app.selected_location_space_ids
+            .iter()
+            .map(|space_id| {
+                app.venue_space_ids
+                    .get(space_id)
+                    .cloned()
+                    .unwrap_or_else(|| space_id.clone())
+            })
+            .collect::<Vec<_>>(),
     )
     .block(
         Block::default()
@@ -63,12 +67,14 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
     .highlight_symbol(">> ");
 
     let area = frame.area();
-
-    // Create a centered popup area
     let popup_area = centered_rect(80, 60, area);
 
-    // Clear the background
     frame.render_widget(Clear, popup_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(5)])
+        .split(popup_area);
 
     let title = format!(
         "Booking Form - {}",
@@ -94,8 +100,8 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
         .block(block)
         .alignment(Alignment::Center);
 
-    frame.render_widget(paragraph, popup_area);
-    frame.render_stateful_widget(spaces_list, popup_area, &mut app.list_state);
+    frame.render_widget(paragraph, chunks[0]);
+    frame.render_stateful_widget(spaces_list, chunks[1], &mut app.list_state);
 }
 
 fn render_confirmation(app: &mut App, frame: &mut Frame) {

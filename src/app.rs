@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::event::{AppEvent, Event, EventHandler};
+use crate::skedda::Skedda;
 use crate::ui;
 
 use ratatui::{
@@ -9,7 +10,7 @@ use ratatui::{
     widgets::{ListItem, ListState},
 };
 
-const LOCATIONS: [&str; 12] = [
+const LOCATIONS: [&str; 13] = [
     "Adair Park",
     "Avondale Estates",
     "Buckhead",
@@ -22,6 +23,7 @@ const LOCATIONS: [&str; 12] = [
     "Roswell",
     "Virginia-Highland",
     "Westside",
+    "Toco Hills",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,17 +113,27 @@ impl App<'_> {
                 self.test_http = true;
             }
             KeyCode::Up | KeyCode::Char('k') => {
+                let list_len = match self.current_view {
+                    ViewState::LocationSelection => self.locations.len(),
+                    ViewState::BookingForm => self.selected_location_space_ids.len(),
+                    ViewState::Confirmation => 0,
+                };
                 let selected = self.list_state.selected().unwrap_or(0);
                 let new_selected = if selected == 0 {
-                    self.locations.len().saturating_sub(1)
+                    list_len.saturating_sub(1)
                 } else {
                     selected.saturating_sub(1)
                 };
                 self.list_state.select(Some(new_selected));
             }
             KeyCode::Down | KeyCode::Char('j') => {
+                let list_len = match self.current_view {
+                    ViewState::LocationSelection => self.locations.len(),
+                    ViewState::BookingForm => self.selected_location_space_ids.len(),
+                    ViewState::Confirmation => 0,
+                };
                 let selected = self.list_state.selected().unwrap_or(0);
-                let new_selected = if selected >= self.locations.len().saturating_sub(1) {
+                let new_selected = if selected >= list_len.saturating_sub(1) {
                     0
                 } else {
                     selected.saturating_add(1)
@@ -133,9 +145,24 @@ impl App<'_> {
                     ViewState::LocationSelection => {
                         if let Some(selected) = self.list_state.selected() {
                             if selected < self.locations.len() {
-                                // Get the location name from the ListItem
                                 let location_name = LOCATIONS[selected];
                                 self.selected_location = Some(location_name.to_string());
+                                // Fetch data here, not in render—render must never do I/O or it
+                                // blocks the main loop and prevents Escape/keys from being handled.
+                                if let Ok(mut skedda) = Skedda::new() {
+                                    skedda.fetch_space_ids();
+                                    self.venue_space_ids = skedda.venue_space_ids.clone();
+                                    self.selected_location_space_ids =
+                                        skedda.fetch_location_space_ids(location_name);
+                                } else {
+                                    self.venue_space_ids.clear();
+                                    self.selected_location_space_ids.clear();
+                                }
+                                self.list_state.select(if self.selected_location_space_ids.is_empty() {
+                                    None
+                                } else {
+                                    Some(0)
+                                });
                                 self.current_view = ViewState::BookingForm;
                             }
                         }
