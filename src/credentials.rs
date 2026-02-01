@@ -4,9 +4,12 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Credentials {
-    pub username: String,
-    pub password: String,
+#[serde(tag = "type")]
+pub enum Credentials {
+    #[serde(rename = "password")]
+    Password { username: String, password: String },
+    #[serde(rename = "cookie")]
+    Cookie { cookie: String },
 }
 
 fn config_path() -> Result<PathBuf> {
@@ -25,16 +28,25 @@ pub fn load_credentials() -> Result<Option<Credentials>> {
     Ok(Some(creds))
 }
 
-pub fn save_credentials(username: &str, password: &str) -> Result<()> {
+pub fn save_password_credentials(username: &str, password: &str) -> Result<()> {
+    save_credentials(&Credentials::Password {
+        username: username.to_string(),
+        password: password.to_string(),
+    })
+}
+
+pub fn save_cookie_credentials(cookie: &str) -> Result<()> {
+    save_credentials(&Credentials::Cookie {
+        cookie: cookie.to_string(),
+    })
+}
+
+fn save_credentials(creds: &Credentials) -> Result<()> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("Failed to create config directory")?;
     }
-    let creds = Credentials {
-        username: username.to_string(),
-        password: password.to_string(),
-    };
-    let data = serde_json::to_string_pretty(&creds).context("Failed to serialize credentials")?;
+    let data = serde_json::to_string_pretty(creds).context("Failed to serialize credentials")?;
     fs::write(&path, &data).context("Failed to write credentials file")?;
 
     #[cfg(unix)]

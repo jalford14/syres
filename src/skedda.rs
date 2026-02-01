@@ -46,6 +46,44 @@ impl Skedda {
         })
     }
 
+    /// Authenticate with Skedda using a session cookie.
+    ///
+    /// Sets the X-Skedda-ApplicationCookie on the jar and verifies it
+    /// by fetching the booking page.
+    pub fn authenticate_with_cookie(&mut self, cookie_value: &str) -> Result<()> {
+        let url = self
+            .base_url
+            .parse::<reqwest::Url>()
+            .context("Failed to parse base URL")?;
+        self.cookie_jar.add_cookie_str(
+            &format!("X-Skedda-ApplicationCookie={}", cookie_value),
+            &url,
+        );
+
+        // Verify the cookie works by fetching the booking page
+        let booking_url = format!("{}/booking", self.base_url);
+        let response = self
+            .client
+            .get(&booking_url)
+            .send()
+            .context("Failed to verify session cookie")?;
+
+        let final_url = response.url().to_string();
+        if final_url.contains("login") {
+            anyhow::bail!("Session cookie is invalid or expired");
+        }
+
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Session cookie verification failed with status {}",
+                response.status()
+            );
+        }
+
+        self.authenticated = true;
+        Ok(())
+    }
+
     /// Authenticate with Skedda using username/password.
     ///
     /// Flow:

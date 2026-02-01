@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::Local;
-use crate::credentials;
+use crate::credentials::{self, Credentials};
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::skedda::{AvailableSlot, Skedda};
 use crate::ui;
@@ -37,9 +37,16 @@ pub enum ViewState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum LoginMode {
+    EmailPassword,
+    SessionCookie,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum LoginField {
     Username,
     Password,
+    Cookie,
 }
 
 /// Application.
@@ -57,8 +64,10 @@ pub struct App<'a> {
     pub selected_space_id: Option<String>,
     pub availability_date: String,
     // Login fields
+    pub login_mode: LoginMode,
     pub username_input: String,
     pub password_input: String,
+    pub cookie_input: String,
     pub login_field_focus: LoginField,
     pub auth_error: Option<String>,
     // Persistent authenticated client
@@ -83,8 +92,10 @@ impl Default for App<'_> {
             available_slots: Vec::new(),
             selected_space_id: None,
             availability_date: String::new(),
+            login_mode: LoginMode::EmailPassword,
             username_input: String::new(),
             password_input: String::new(),
+            cookie_input: String::new(),
             login_field_focus: LoginField::Username,
             auth_error: None,
             skedda: None,
@@ -99,13 +110,28 @@ impl App<'_> {
 
         // Try loading saved credentials
         if let Ok(Some(creds)) = credentials::load_credentials() {
-            if let Ok(mut skedda) = Skedda::new() {
-                if skedda.authenticate(&creds.username, &creds.password).is_ok() {
-                    app.skedda = Some(skedda);
-                    app.current_view = ViewState::LocationSelection;
-                } else {
-                    let _ = credentials::clear_credentials();
-                    app.current_view = ViewState::Login;
+            match creds {
+                Credentials::Password { username, password } => {
+                    if let Ok(mut skedda) = Skedda::new() {
+                        if skedda.authenticate(&username, &password).is_ok() {
+                            app.skedda = Some(skedda);
+                            app.current_view = ViewState::LocationSelection;
+                        } else {
+                            let _ = credentials::clear_credentials();
+                            app.current_view = ViewState::Login;
+                        }
+                    }
+                }
+                Credentials::Cookie { cookie } => {
+                    if let Ok(mut skedda) = Skedda::new() {
+                        if skedda.authenticate_with_cookie(&cookie).is_ok() {
+                            app.skedda = Some(skedda);
+                            app.current_view = ViewState::LocationSelection;
+                        } else {
+                            let _ = credentials::clear_credentials();
+                            app.current_view = ViewState::Login;
+                        }
+                    }
                 }
             }
         }
@@ -127,6 +153,7 @@ impl App<'_> {
             Event::Tick => self.tick(),
             Event::Crossterm(event) => match event {
                 crossterm::event::Event::Key(key_event) => self.handle_key_event(key_event)?,
+                crossterm::event::Event::Paste(text) => self.handle_paste(text)?,
                 _ => {}
             },
             Event::App(app_event) => match app_event {
@@ -157,36 +184,104 @@ impl App<'_> {
         Ok(())
     }
 
+    fn next_login_field(&self) -> LoginField {
+        match self.login_mode {
+            LoginMode::EmailPassword => match self.login_field_focus {
+                LoginField::Username => LoginField::Password,
+                LoginField::Password => LoginField::Username,
+                LoginField::Cookie => LoginField::Username,
+            },
+            LoginMode::SessionCookie => LoginField::Cookie,
+        }
+    }
+
+    fn prev_login_field(&self) -> LoginField {
+        match self.login_mode {
+            LoginMode::EmailPassword => match self.login_field_focus {
+                LoginField::Username => LoginField::Password,
+                LoginField::Password => LoginField::Username,
+                LoginField::Cookie => LoginField::Password,
+            },
+            LoginMode::SessionCookie => LoginField::Cookie,
+        }
+    }
+
+    /// Switch login mode and move focus to an appropriate field.
+    fn switch_login_mode(&mut self) {
+        self.login_mode = match self.login_mode {
+            LoginMode::EmailPassword => LoginMode::SessionCookie,
+            LoginMode::SessionCookie => LoginMode::EmailPassword,
+        };
+        // Move focus to the first field in the new mode
+        self.login_field_focus = match self.login_mode {
+            LoginMode::EmailPassword => LoginField::Username,
+            LoginMode::SessionCookie => LoginField::Cookie,
+        };
+    }
+
     fn handle_login_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
             KeyCode::Esc => {
                 self.events.send(AppEvent::Quit);
             }
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.login_field_focus = match self.login_field_focus {
-                    LoginField::Username => LoginField::Password,
-                    LoginField::Password => LoginField::Username,
-                };
+            KeyCode::Left | KeyCode::Right => {
+                self.switch_login_mode();
             }
-            KeyCode::Char(c) => {
-                match self.login_field_focus {
-                    LoginField::Username => self.username_input.push(c),
-                    LoginField::Password => self.password_input.push(c),
+            KeyCode::Tab => {
+                self.login_field_focus = self.next_login_field();
+            }
+            KeyCode::BackTab => {
+                self.login_field_focus = self.prev_login_field();
+            }
+            KeyCode::Char(c) => match self.login_field_focus {
+                LoginField::Username => self.username_input.push(c),
+                LoginField::Password => self.password_input.push(c),
+                LoginField::Cookie => self.cookie_input.push(c),
+            },
+            KeyCode::Backspace => match self.login_field_focus {
+                LoginField::Username => {
+                    self.username_input.pop();
                 }
-            }
-            KeyCode::Backspace => {
-                match self.login_field_focus {
-                    LoginField::Username => { self.username_input.pop(); }
-                    LoginField::Password => { self.password_input.pop(); }
+                LoginField::Password => {
+                    self.password_input.pop();
                 }
-            }
+                LoginField::Cookie => {
+                    self.cookie_input.pop();
+                }
+            },
             KeyCode::Enter => {
-                self.auth_error = None;
+                self.submit_login()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_paste(&mut self, text: String) -> color_eyre::Result<()> {
+        if self.current_view == ViewState::Login {
+            let trimmed = text.trim().to_string();
+            match self.login_field_focus {
+                LoginField::Username => self.username_input.push_str(&trimmed),
+                LoginField::Password => self.password_input.push_str(&trimmed),
+                LoginField::Cookie => self.cookie_input.push_str(&trimmed),
+            }
+        }
+        Ok(())
+    }
+
+    fn submit_login(&mut self) -> color_eyre::Result<()> {
+        self.auth_error = None;
+        match self.login_mode {
+            LoginMode::EmailPassword => {
+                if self.username_input.is_empty() || self.password_input.is_empty() {
+                    self.auth_error = Some("Email and password are required".to_string());
+                    return Ok(());
+                }
                 match Skedda::new() {
                     Ok(mut skedda) => {
                         match skedda.authenticate(&self.username_input, &self.password_input) {
                             Ok(()) => {
-                                let _ = credentials::save_credentials(
+                                let _ = credentials::save_password_credentials(
                                     &self.username_input,
                                     &self.password_input,
                                 );
@@ -203,7 +298,30 @@ impl App<'_> {
                     }
                 }
             }
-            _ => {}
+            LoginMode::SessionCookie => {
+                if self.cookie_input.is_empty() {
+                    self.auth_error = Some("Session cookie is required".to_string());
+                    return Ok(());
+                }
+                match Skedda::new() {
+                    Ok(mut skedda) => {
+                        match skedda.authenticate_with_cookie(&self.cookie_input) {
+                            Ok(()) => {
+                                let _ =
+                                    credentials::save_cookie_credentials(&self.cookie_input);
+                                self.skedda = Some(skedda);
+                                self.current_view = ViewState::LocationSelection;
+                            }
+                            Err(e) => {
+                                self.auth_error = Some(e.to_string());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.auth_error = Some(format!("Client error: {}", e));
+                    }
+                }
+            }
         }
         Ok(())
     }
