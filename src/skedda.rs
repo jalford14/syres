@@ -1,36 +1,116 @@
 use anyhow::{Context, Result};
+use chrono::NaiveTime;
 use reqwest::{
     blocking::Client,
+    cookie::Jar,
     header::{HeaderMap, HeaderValue},
 };
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::sync::Arc;
+
+/// A time slot that is available to book.
+#[derive(Debug, Clone)]
+pub struct AvailableSlot {
+    pub start: String,
+    pub end: String,
+}
 
 pub struct Skedda {
     client: Client,
+    #[allow(dead_code)] // held to keep the Arc alive for the client
+    cookie_jar: Arc<Jar>,
     base_url: String,
     pub venue_space_ids: HashMap<String, String>,
     pub selected_location_space_ids: Vec<String>,
+    pub authenticated: bool,
 }
 
 impl Skedda {
     pub fn new() -> Result<Self> {
+        let jar = Arc::new(Jar::default());
         let client = Client::builder()
-            .cookie_store(true)
+            .cookie_provider(jar.clone())
             .build()
             .context("Failed to create HTTP client")?;
 
         Ok(Self {
             client,
+            cookie_jar: jar,
             base_url: "https://switchyards.skedda.com".to_string(),
             selected_location_space_ids: Vec::new(),
             venue_space_ids: HashMap::new(),
+            authenticated: false,
         })
     }
 
-    // TODO: Need to auth and then add the cookies to the jar
+    /// Authenticate with Skedda using username/password.
+    ///
+    /// Flow:
+    /// 1. GET app.skedda.com/account/login — obtains CSRF cookie + token
+    /// 2. POST app.skedda.com/logins — sends credentials with CSRF header
+    pub fn authenticate(&mut self, username: &str, password: &str) -> Result<()> {
+        // Step 1: Fetch login page to get CSRF cookie + token
+        let login_page_url = "https://app.skedda.com/account/login";
+        let page_response = self
+            .client
+            .get(login_page_url)
+            .send()
+            .context("Failed to fetch login page")?;
+
+        let html = page_response
+            .text()
+            .context("Failed to read login page")?;
+
+        let csrf_token = Self::extract_csrf_token(&html)
+            .context("Failed to extract CSRF token from login page")?;
+
+        // Step 2: POST credentials with CSRF token
+        let login_url = "https://app.skedda.com/logins";
+        let body = serde_json::json!({
+            "login": {
+                "username": username,
+                "password": password,
+                "rememberMe": false,
+                "arbitraryerrors": null
+            }
+        });
+
+        let response = self
+            .client
+            .post(login_url)
+            .header("Content-Type", "application/json")
+            .header("X-Skedda-RequestVerificationToken", &csrf_token)
+            .body(serde_json::to_string(&body)?)
+            .send()
+            .context("Failed to send login request")?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            self.authenticated = true;
+            return Ok(());
+        }
+
+        let response_text = response.text().context("Failed to read login response")?;
+
+        // Try to parse Skedda error format
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response_text) {
+            if let Some(errors) = json["errors"].as_array() {
+                let messages: Vec<&str> = errors
+                    .iter()
+                    .filter_map(|e| e["detail"].as_str())
+                    .collect();
+                if !messages.is_empty() {
+                    anyhow::bail!("{}", messages.join("; "));
+                }
+            }
+        }
+        anyhow::bail!("Login failed with status {}", status);
+    }
+
     pub fn get_booking_data(&self) -> Result<serde_json::Value> {
         let csrf_token = self.get_booking_page()?;
         let url = format!("{}/webs", self.base_url);
@@ -107,28 +187,31 @@ impl Skedda {
         let mut venue_space_ids = HashMap::new();
         let webs_data = self.get_booking_data().unwrap();
 
-        // Top-level "spaces" array: add only leaf spaces (skip items with "spaceIds",
-        // which are venue/parent objects). IDs can be string or number in JSON.
         if let Some(items) = webs_data["spaces"].as_array() {
             for item in items {
                 if item.get("spaceIds").is_some() {
-                    continue; // venue/parent, not a bookable space
+                    continue;
                 }
                 let id = item.get("id").and_then(Self::id_from_value);
-                let name = item.get("name").and_then(serde_json::Value::as_str).map(String::from);
+                let name = item
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from);
                 if let (Some(id), Some(name)) = (id, name) {
                     venue_space_ids.insert(id, name);
                 }
             }
         }
 
-        // Venue-specific "spaces": some APIs nest spaces under venue["spaces"].
         if let Some(venues) = webs_data["venue"].as_array() {
             for venue in venues {
                 if let Some(spaces) = venue["spaces"].as_array() {
                     for sp in spaces {
                         let id = sp.get("id").and_then(Self::id_from_value);
-                        let name = sp.get("name").and_then(serde_json::Value::as_str).map(String::from);
+                        let name = sp
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .map(String::from);
                         if let (Some(id), Some(name)) = (id, name) {
                             venue_space_ids.insert(id, name);
                         }
@@ -143,20 +226,14 @@ impl Skedda {
 
     /// Extract space IDs from a JSON array (handles both numeric and string IDs).
     fn space_ids_from_array(arr: &[serde_json::Value]) -> Vec<String> {
-        arr.iter()
-            .filter_map(Self::id_from_value)
-            .collect()
+        arr.iter().filter_map(Self::id_from_value).collect()
     }
 
     pub fn fetch_location_space_ids(&self, selected_location: &str) -> Vec<String> {
         let webs_data = self.get_booking_data().unwrap();
 
-        // Normalize "Virginia-Highland" -> "Virginia Highland" to match Skedda's spaceTags.
         let name_to_match = selected_location.replace('-', " ");
 
-        // 1) Primary: venue[0].spacePresentation.spaceTags — each tag has "name" (location)
-        //    and "spaceIds" (array of space IDs). This is the canonical structure for
-        //    Switchyards/Skedda.
         if let Some(venues) = webs_data["venue"].as_array() {
             if let Some(venue0) = venues.first() {
                 if let Some(space_tags) = venue0["spacePresentation"]["spaceTags"].as_array() {
@@ -171,7 +248,6 @@ impl Skedda {
             }
         }
 
-        // 2) Fallback: venue array with venue["name"] match, or venue["spaceIds"] / venue["spaces"].
         if let Some(venues) = webs_data["venue"].as_array() {
             for venue in venues {
                 if venue["name"].as_str() != Some(selected_location) {
@@ -196,7 +272,6 @@ impl Skedda {
             }
         }
 
-        // 3) Fallback: top-level "spaces" array, item with name == location and "spaceIds".
         if let Some(items) = webs_data["spaces"].as_array() {
             for item in items {
                 if item["name"].as_str() != Some(selected_location) {
@@ -209,5 +284,134 @@ impl Skedda {
         }
 
         Vec::new()
+    }
+
+    /// Fetch bookings for a given date.
+    pub fn fetch_bookings(&self, date: &str) -> Result<Vec<serde_json::Value>> {
+        let csrf_token = self.get_booking_page()?;
+        let url = format!("{}/bookingslists", self.base_url);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Skedda-RequestVerificationToken",
+            HeaderValue::from_str(&csrf_token)?,
+        );
+        headers.insert("Accept", HeaderValue::from_str("application/json")?);
+
+        let start = format!("{}T00:00:00", date);
+        let end = format!("{}T23:59:59", date);
+
+        let response = self
+            .client
+            .get(&url)
+            .headers(headers)
+            .query(&[("start", &start), ("end", &end)])
+            .send()
+            .context("Failed to request bookings")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Bookings API returned {}", response.status());
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .context("Failed to parse bookings JSON")?;
+
+        if env::var("SYRES_DEBUG_BOOKINGS").is_ok() {
+            if let Ok(s) = serde_json::to_string_pretty(&json) {
+                let _ = fs::write("bookings_debug.json", s);
+            }
+        }
+
+        let bookings = json["bookings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(bookings)
+    }
+
+    /// Calculate available time slots for a space by finding gaps in bookings.
+    pub fn calculate_availability(
+        space_id: &str,
+        _date: &str,
+        bookings: &[serde_json::Value],
+    ) -> Vec<AvailableSlot> {
+        let open = NaiveTime::from_hms_opt(6, 0, 0).unwrap();
+        let close = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
+
+        // Filter bookings to target space and parse start/end times
+        let mut intervals: Vec<(NaiveTime, NaiveTime)> = Vec::new();
+        for booking in bookings {
+            // Check if booking belongs to this space
+            let belongs = if let Some(ids) = booking["spaceIds"].as_array() {
+                ids.iter()
+                    .any(|v| Self::id_from_value(v).as_deref() == Some(space_id))
+            } else if let Some(id) = booking.get("spaceId").and_then(Self::id_from_value) {
+                id == space_id
+            } else {
+                false
+            };
+            if !belongs {
+                continue;
+            }
+
+            let start_str = booking["start"].as_str().unwrap_or_default();
+            let end_str = booking["end"].as_str().unwrap_or_default();
+
+            // Parse time portion from datetime string (e.g. "2025-01-15T09:00:00")
+            let start_time = start_str
+                .split('T')
+                .nth(1)
+                .and_then(|t| NaiveTime::parse_from_str(t, "%H:%M:%S").ok());
+            let end_time = end_str
+                .split('T')
+                .nth(1)
+                .and_then(|t| NaiveTime::parse_from_str(t, "%H:%M:%S").ok());
+
+            if let (Some(s), Some(e)) = (start_time, end_time) {
+                intervals.push((s, e));
+            }
+        }
+
+        // Sort by start time
+        intervals.sort_by_key(|&(s, _)| s);
+
+        // Merge overlapping intervals
+        let mut merged: Vec<(NaiveTime, NaiveTime)> = Vec::new();
+        for (s, e) in intervals {
+            if let Some(last) = merged.last_mut() {
+                if s <= last.1 {
+                    last.1 = last.1.max(e);
+                    continue;
+                }
+            }
+            merged.push((s, e));
+        }
+
+        // Find gaps within operating hours
+        let mut slots = Vec::new();
+        let mut cursor = open;
+
+        for (s, e) in &merged {
+            let s = (*s).max(open);
+            let e = (*e).min(close);
+            if s > cursor {
+                slots.push(AvailableSlot {
+                    start: cursor.format("%H:%M").to_string(),
+                    end: s.format("%H:%M").to_string(),
+                });
+            }
+            cursor = cursor.max(e);
+        }
+
+        if cursor < close {
+            slots.push(AvailableSlot {
+                start: cursor.format("%H:%M").to_string(),
+                end: close.format("%H:%M").to_string(),
+            });
+        }
+
+        slots
     }
 }

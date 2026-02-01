@@ -1,6 +1,7 @@
 use crate::app::App;
 
 pub mod app;
+pub mod credentials;
 pub mod event;
 pub mod skedda;
 pub mod ui;
