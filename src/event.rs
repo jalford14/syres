@@ -26,6 +26,12 @@ pub struct EventHandler {
     receiver: mpsc::Receiver<Event>,
 }
 
+impl Default for EventHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventHandler {
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::channel();

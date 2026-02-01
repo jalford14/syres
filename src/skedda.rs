@@ -18,6 +18,13 @@ pub struct AvailableSlot {
     pub end: String,
 }
 
+/// A single 15-minute time increment within an available slot.
+#[derive(Debug, Clone)]
+pub struct TimeIncrement {
+    pub time: NaiveTime,
+    pub block_index: usize,
+}
+
 pub struct Skedda {
     client: Client,
     #[allow(dead_code)] // held to keep the Arc alive for the client
@@ -26,6 +33,11 @@ pub struct Skedda {
     pub venue_space_ids: HashMap<String, String>,
     pub selected_location_space_ids: Vec<String>,
     pub authenticated: bool,
+    // Caching
+    cached_webs_data: Option<serde_json::Value>,
+    cached_bookings: HashMap<String, Vec<serde_json::Value>>,
+    cached_csrf_token: Option<String>,
+    pub venue_id: Option<String>,
 }
 
 impl Skedda {
@@ -43,6 +55,10 @@ impl Skedda {
             selected_location_space_ids: Vec::new(),
             venue_space_ids: HashMap::new(),
             authenticated: false,
+            cached_webs_data: None,
+            cached_bookings: HashMap::new(),
+            cached_csrf_token: None,
+            venue_id: None,
         })
     }
 
@@ -56,7 +72,7 @@ impl Skedda {
             .parse::<reqwest::Url>()
             .context("Failed to parse base URL")?;
         self.cookie_jar.add_cookie_str(
-            &format!("X-Skedda-ApplicationCookie={}", cookie_value),
+            &format!("X-Skedda-ApplicationCookie={cookie_value}"),
             &url,
         );
 
@@ -149,7 +165,10 @@ impl Skedda {
         anyhow::bail!("Login failed with status {}", status);
     }
 
-    pub fn get_booking_data(&self) -> Result<serde_json::Value> {
+    pub fn get_booking_data(&mut self) -> Result<serde_json::Value> {
+        if let Some(ref cached) = self.cached_webs_data {
+            return Ok(cached.clone());
+        }
         let csrf_token = self.get_booking_page()?;
         let url = format!("{}/webs", self.base_url);
         let mut headers = HeaderMap::new();
@@ -178,10 +197,14 @@ impl Skedda {
             }
         }
 
+        self.cached_webs_data = Some(response_json.clone());
         Ok(response_json)
     }
 
-    fn get_booking_page(&self) -> Result<String> {
+    fn get_booking_page(&mut self) -> Result<String> {
+        if let Some(ref token) = self.cached_csrf_token {
+            return Ok(token.clone());
+        }
         let url = format!("{}/booking", self.base_url);
         let response = self
             .client
@@ -194,6 +217,7 @@ impl Skedda {
             .context("Failed to get response text")?;
 
         let token = Skedda::extract_csrf_token(&html_content)?;
+        self.cached_csrf_token = Some(token.clone());
         Ok(token)
     }
 
@@ -242,6 +266,11 @@ impl Skedda {
         }
 
         if let Some(venues) = webs_data["venue"].as_array() {
+            if let Some(venue0) = venues.first() {
+                if let Some(id) = venue0.get("id").and_then(Self::id_from_value) {
+                    self.venue_id = Some(id);
+                }
+            }
             for venue in venues {
                 if let Some(spaces) = venue["spaces"].as_array() {
                     for sp in spaces {
@@ -267,7 +296,7 @@ impl Skedda {
         arr.iter().filter_map(Self::id_from_value).collect()
     }
 
-    pub fn fetch_location_space_ids(&self, selected_location: &str) -> Vec<String> {
+    pub fn fetch_location_space_ids(&mut self, selected_location: &str) -> Vec<String> {
         let webs_data = self.get_booking_data().unwrap();
 
         let name_to_match = selected_location.replace('-', " ");
@@ -325,7 +354,10 @@ impl Skedda {
     }
 
     /// Fetch bookings for a given date.
-    pub fn fetch_bookings(&self, date: &str) -> Result<Vec<serde_json::Value>> {
+    pub fn fetch_bookings(&mut self, date: &str) -> Result<Vec<serde_json::Value>> {
+        if let Some(cached) = self.cached_bookings.get(date) {
+            return Ok(cached.clone());
+        }
         let csrf_token = self.get_booking_page()?;
         let url = format!("{}/bookingslists", self.base_url);
 
@@ -336,8 +368,8 @@ impl Skedda {
         );
         headers.insert("Accept", HeaderValue::from_str("application/json")?);
 
-        let start = format!("{}T00:00:00", date);
-        let end = format!("{}T23:59:59", date);
+        let start = format!("{date}T00:00:00");
+        let end = format!("{date}T23:59:59");
 
         let response = self
             .client
@@ -366,7 +398,83 @@ impl Skedda {
             .cloned()
             .unwrap_or_default();
 
+        self.cached_bookings.insert(date.to_string(), bookings.clone());
         Ok(bookings)
+    }
+
+    /// Create a booking via POST /bookings.
+    pub fn create_booking(
+        &mut self,
+        space_id: &str,
+        date: &str,
+        start_time: &NaiveTime,
+        end_time: &NaiveTime,
+        title: &str,
+    ) -> Result<()> {
+        let csrf_token = self.get_booking_page()?;
+        let url = format!("{}/bookings", self.base_url);
+
+        let venue_id: i64 = self
+            .venue_id
+            .as_ref()
+            .context("No venue ID available")?
+            .parse()
+            .context("Invalid venue ID")?;
+
+        let space_id_int: i64 = space_id.parse().context("Invalid space ID")?;
+
+        let start = format!("{}T{}", date, start_time.format("%H:%M:%S"));
+        let end = format!("{}T{}", date, end_time.format("%H:%M:%S"));
+
+        let body = serde_json::json!({
+            "booking": {
+                "start": start,
+                "end": end,
+                "title": title,
+                "venue": venue_id,
+                "spaces": [space_id_int],
+                "type": 1,
+                "price": 0
+            }
+        });
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Skedda-RequestVerificationToken",
+            HeaderValue::from_str(&csrf_token)?,
+        );
+        headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers)
+            .body(serde_json::to_string(&body)?)
+            .send()
+            .context("Failed to create booking")?;
+
+        if response.status().is_success() {
+            // Invalidate bookings cache for this date
+            self.cached_bookings.remove(date);
+            return Ok(());
+        }
+
+        let response_text = response
+            .text()
+            .context("Failed to read booking response")?;
+
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response_text) {
+            if let Some(errors) = json["errors"].as_array() {
+                let messages: Vec<&str> = errors
+                    .iter()
+                    .filter_map(|e| e["detail"].as_str())
+                    .collect();
+                if !messages.is_empty() {
+                    anyhow::bail!("{}", messages.join("; "));
+                }
+            }
+        }
+        anyhow::bail!("Booking failed: {}", response_text);
     }
 
     /// Calculate available time slots for a space by finding gaps in bookings.
@@ -452,4 +560,28 @@ impl Skedda {
 
         slots
     }
+}
+
+/// Break available slots into 15-minute increments, each tagged with its block index.
+pub fn generate_time_increments(slots: &[AvailableSlot]) -> Vec<TimeIncrement> {
+    let mut increments = Vec::new();
+    for (block_index, slot) in slots.iter().enumerate() {
+        let start = NaiveTime::parse_from_str(&slot.start, "%H:%M")
+            .or_else(|_| NaiveTime::parse_from_str(&slot.start, "%H:%M:%S"))
+            .unwrap_or_else(|_| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        let end = NaiveTime::parse_from_str(&slot.end, "%H:%M")
+            .or_else(|_| NaiveTime::parse_from_str(&slot.end, "%H:%M:%S"))
+            .unwrap_or_else(|_| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+
+        let mut cursor = start;
+        let fifteen_min = chrono::TimeDelta::minutes(15);
+        while cursor + fifteen_min <= end {
+            increments.push(TimeIncrement {
+                time: cursor,
+                block_index,
+            });
+            cursor += fifteen_min;
+        }
+    }
+    increments
 }

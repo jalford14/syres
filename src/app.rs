@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use chrono::Local;
+use chrono::{Local, NaiveTime, TimeDelta};
 use crate::credentials::{self, Credentials};
 use crate::event::{AppEvent, Event, EventHandler};
-use crate::skedda::{AvailableSlot, Skedda};
+use crate::skedda::{self, AvailableSlot, Skedda, TimeIncrement};
 use crate::ui;
 
 use ratatui::{
@@ -49,12 +49,20 @@ pub enum LoginField {
     Cookie,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum BookingFocus {
+    Spaces,
+    TimeSlots,
+}
+
 /// Application.
 pub struct App<'a> {
     pub running: bool,
     pub locations: Vec<ListItem<'a>>,
     pub events: EventHandler,
-    pub list_state: ListState,
+    pub location_list_state: ListState,
+    pub spaces_list_state: ListState,
+    pub timeslots_list_state: ListState,
     pub current_view: ViewState,
     pub selected_location: Option<String>,
     pub test_http: bool,
@@ -63,6 +71,11 @@ pub struct App<'a> {
     pub available_slots: Vec<AvailableSlot>,
     pub selected_space_id: Option<String>,
     pub availability_date: String,
+    // Time slot selection
+    pub time_increments: Vec<TimeIncrement>,
+    pub booking_focus: BookingFocus,
+    pub selection_duration: usize,
+    pub booking_error: Option<String>,
     // Login fields
     pub login_mode: LoginMode,
     pub username_input: String,
@@ -83,7 +96,9 @@ impl Default for App<'_> {
                 .map(|&s| ListItem::new(s.to_string()))
                 .collect(),
             events: EventHandler::new(),
-            list_state: ListState::default().with_selected(Some(0)),
+            location_list_state: ListState::default().with_selected(Some(0)),
+            spaces_list_state: ListState::default(),
+            timeslots_list_state: ListState::default(),
             current_view: ViewState::Login,
             selected_location: None,
             test_http: false,
@@ -92,6 +107,10 @@ impl Default for App<'_> {
             available_slots: Vec::new(),
             selected_space_id: None,
             availability_date: String::new(),
+            time_increments: Vec::new(),
+            booking_focus: BookingFocus::Spaces,
+            selection_duration: 4,
+            booking_error: None,
             login_mode: LoginMode::EmailPassword,
             username_input: String::new(),
             password_input: String::new(),
@@ -294,7 +313,7 @@ impl App<'_> {
                         }
                     }
                     Err(e) => {
-                        self.auth_error = Some(format!("Client error: {}", e));
+                        self.auth_error = Some(format!("Client error: {e}"));
                     }
                 }
             }
@@ -318,7 +337,7 @@ impl App<'_> {
                         }
                     }
                     Err(e) => {
-                        self.auth_error = Some(format!("Client error: {}", e));
+                        self.auth_error = Some(format!("Client error: {e}"));
                     }
                 }
             }
@@ -327,109 +346,247 @@ impl App<'_> {
     }
 
     fn handle_app_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        match self.current_view {
+            ViewState::LocationSelection => self.handle_location_key(key_event),
+            ViewState::BookingForm => self.handle_booking_key(key_event),
+            ViewState::Confirmation => self.handle_confirmation_key(key_event),
+            ViewState::Login => Ok(()), // handled in handle_login_key
+        }
+    }
+
+    fn handle_location_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
-            KeyCode::Esc | KeyCode::Char('q') => match self.current_view {
-                ViewState::LocationSelection => self.events.send(AppEvent::Quit),
-                ViewState::BookingForm | ViewState::Confirmation => {
-                    self.current_view = ViewState::LocationSelection;
-                    self.selected_location = None;
-                }
-                ViewState::Login => {} // handled in handle_login_key
-            },
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.events.send(AppEvent::Quit);
+            }
             KeyCode::Char('t') => {
                 self.test_http = true;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                let list_len = match self.current_view {
-                    ViewState::LocationSelection => self.locations.len(),
-                    ViewState::BookingForm => self.selected_location_space_ids.len(),
-                    ViewState::Confirmation | ViewState::Login => 0,
-                };
-                let selected = self.list_state.selected().unwrap_or(0);
-                let new_selected = if selected == 0 {
-                    list_len.saturating_sub(1)
+                let len = self.locations.len();
+                let selected = self.location_list_state.selected().unwrap_or(0);
+                let new = if selected == 0 {
+                    len.saturating_sub(1)
                 } else {
                     selected.saturating_sub(1)
                 };
-                self.list_state.select(Some(new_selected));
+                self.location_list_state.select(Some(new));
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let list_len = match self.current_view {
-                    ViewState::LocationSelection => self.locations.len(),
-                    ViewState::BookingForm => self.selected_location_space_ids.len(),
-                    ViewState::Confirmation | ViewState::Login => 0,
-                };
-                let selected = self.list_state.selected().unwrap_or(0);
-                let new_selected = if selected >= list_len.saturating_sub(1) {
+                let len = self.locations.len();
+                let selected = self.location_list_state.selected().unwrap_or(0);
+                let new = if selected >= len.saturating_sub(1) {
                     0
                 } else {
                     selected.saturating_add(1)
                 };
-                self.list_state.select(Some(new_selected));
+                self.location_list_state.select(Some(new));
             }
             KeyCode::Enter => {
-                match self.current_view {
-                    ViewState::LocationSelection => {
-                        if let Some(selected) = self.list_state.selected() {
-                            if selected < self.locations.len() {
-                                let location_name = LOCATIONS[selected];
-                                self.selected_location = Some(location_name.to_string());
+                if let Some(selected) = self.location_list_state.selected() {
+                    if selected < self.locations.len() {
+                        let location_name = LOCATIONS[selected];
+                        self.selected_location = Some(location_name.to_string());
+                        self.booking_focus = BookingFocus::Spaces;
+                        self.selection_duration = 4;
+                        self.booking_error = None;
 
-                                if let Some(ref mut skedda) = self.skedda {
-                                    skedda.fetch_space_ids();
-                                    self.venue_space_ids = skedda.venue_space_ids.clone();
-                                    self.selected_location_space_ids =
-                                        skedda.fetch_location_space_ids(location_name);
-                                    let today = Local::now().format("%Y-%m-%d").to_string();
-                                    if let Some(first_id) =
-                                        self.selected_location_space_ids.first().cloned()
-                                    {
-                                        let bookings = skedda
-                                            .fetch_bookings(&today)
-                                            .unwrap_or_default();
-                                        self.available_slots = Skedda::calculate_availability(
-                                            &first_id,
-                                            &today,
-                                            &bookings,
-                                        );
-                                        self.selected_space_id = Some(first_id);
-                                        self.availability_date = today;
-                                    } else {
-                                        self.available_slots = Vec::new();
-                                        self.selected_space_id = None;
-                                        self.availability_date = today;
-                                    }
-                                } else {
-                                    self.venue_space_ids.clear();
-                                    self.selected_location_space_ids.clear();
-                                    self.available_slots = Vec::new();
-                                    self.selected_space_id = None;
-                                    self.availability_date.clear();
-                                }
-                                self.list_state.select(
-                                    if self.selected_location_space_ids.is_empty() {
-                                        None
-                                    } else {
-                                        Some(0)
-                                    },
-                                );
-                                self.current_view = ViewState::BookingForm;
-                            }
+                        if let Some(ref mut skedda) = self.skedda {
+                            skedda.fetch_space_ids();
+                            self.venue_space_ids = skedda.venue_space_ids.clone();
+                            self.selected_location_space_ids =
+                                skedda.fetch_location_space_ids(location_name);
+                            self.availability_date =
+                                Local::now().format("%Y-%m-%d").to_string();
+                        } else {
+                            self.venue_space_ids.clear();
+                            self.selected_location_space_ids.clear();
+                            self.available_slots = Vec::new();
+                            self.selected_space_id = None;
+                            self.availability_date.clear();
                         }
+
+                        self.spaces_list_state.select(
+                            if self.selected_location_space_ids.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            },
+                        );
+
+                        self.recalculate_availability();
+                        self.current_view = ViewState::BookingForm;
                     }
-                    ViewState::BookingForm => {
-                        self.current_view = ViewState::Confirmation;
-                    }
-                    ViewState::Confirmation => {
-                        self.current_view = ViewState::LocationSelection;
-                        self.selected_location = None;
-                    }
-                    ViewState::Login => {} // handled in handle_login_key
                 }
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_booking_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        match self.booking_focus {
+            BookingFocus::Spaces => match key_event.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let len = self.selected_location_space_ids.len();
+                    if len > 0 {
+                        let sel = self.spaces_list_state.selected().unwrap_or(0);
+                        let new = if sel == 0 { len - 1 } else { sel - 1 };
+                        self.spaces_list_state.select(Some(new));
+                        self.recalculate_availability();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let len = self.selected_location_space_ids.len();
+                    if len > 0 {
+                        let sel = self.spaces_list_state.selected().unwrap_or(0);
+                        let new = if sel >= len - 1 { 0 } else { sel + 1 };
+                        self.spaces_list_state.select(Some(new));
+                        self.recalculate_availability();
+                    }
+                }
+                KeyCode::Tab | KeyCode::Enter => {
+                    if !self.time_increments.is_empty() {
+                        self.booking_focus = BookingFocus::TimeSlots;
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.current_view = ViewState::LocationSelection;
+                    self.selected_location = None;
+                    self.booking_error = None;
+                }
+                _ => {}
+            },
+            BookingFocus::TimeSlots => match key_event.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let len = self.time_increments.len();
+                    if len > 0 {
+                        let sel = self.timeslots_list_state.selected().unwrap_or(0);
+                        let new = if sel == 0 { len - 1 } else { sel - 1 };
+                        self.timeslots_list_state.select(Some(new));
+                        self.clamp_duration();
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let len = self.time_increments.len();
+                    if len > 0 {
+                        let sel = self.timeslots_list_state.selected().unwrap_or(0);
+                        let new = if sel >= len - 1 { 0 } else { sel + 1 };
+                        self.timeslots_list_state.select(Some(new));
+                        self.clamp_duration();
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if self.selection_duration > 1 {
+                        self.selection_duration -= 1;
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    self.selection_duration += 1;
+                    self.clamp_duration();
+                }
+                KeyCode::Enter => {
+                    self.submit_booking();
+                }
+                KeyCode::Esc | KeyCode::Tab => {
+                    self.booking_focus = BookingFocus::Spaces;
+                }
+                KeyCode::Char('q') => {
+                    self.current_view = ViewState::LocationSelection;
+                    self.selected_location = None;
+                    self.booking_error = None;
+                }
+                _ => {}
+            },
+        }
+        Ok(())
+    }
+
+    fn handle_confirmation_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        match key_event.code {
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => {
+                self.current_view = ViewState::LocationSelection;
+                self.selected_location = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Recalculate availability for the currently selected space from cached bookings.
+    fn recalculate_availability(&mut self) {
+        if let Some(selected_idx) = self.spaces_list_state.selected() {
+            if let Some(space_id) = self.selected_location_space_ids.get(selected_idx).cloned() {
+                let date = self.availability_date.clone();
+                if let Some(ref mut skedda) = self.skedda {
+                    let bookings = skedda.fetch_bookings(&date).unwrap_or_default();
+                    self.available_slots =
+                        Skedda::calculate_availability(&space_id, &date, &bookings);
+                }
+                self.selected_space_id = Some(space_id);
+                self.time_increments = skedda::generate_time_increments(&self.available_slots);
+                if self.time_increments.is_empty() {
+                    self.timeslots_list_state.select(None);
+                } else {
+                    self.timeslots_list_state.select(Some(0));
+                }
+                self.clamp_duration();
+            }
+        }
+    }
+
+    /// Ensure selection_duration doesn't cross block boundaries or exceed available slots.
+    fn clamp_duration(&mut self) {
+        if let Some(cursor) = self.timeslots_list_state.selected() {
+            if cursor < self.time_increments.len() {
+                let current_block = self.time_increments[cursor].block_index;
+                let max_in_block = self.time_increments[cursor..]
+                    .iter()
+                    .take_while(|inc| inc.block_index == current_block)
+                    .count();
+                if self.selection_duration > max_in_block {
+                    self.selection_duration = max_in_block;
+                }
+                if self.selection_duration < 1 {
+                    self.selection_duration = 1;
+                }
+            }
+        }
+    }
+
+    /// Compute the start and end NaiveTime of the current selection.
+    pub fn selected_time_range(&self) -> Option<(NaiveTime, NaiveTime)> {
+        let cursor = self.timeslots_list_state.selected()?;
+        let start_inc = self.time_increments.get(cursor)?;
+        let end_idx = cursor + self.selection_duration - 1;
+        let end_inc = self.time_increments.get(end_idx)?;
+        if end_inc.block_index != start_inc.block_index {
+            return None;
+        }
+        let start = start_inc.time;
+        let end = end_inc.time + TimeDelta::minutes(15);
+        Some((start, end))
+    }
+
+    /// Submit the booking via the API.
+    fn submit_booking(&mut self) {
+        self.booking_error = None;
+        if let Some((start_time, end_time)) = self.selected_time_range() {
+            let space_id = self.selected_space_id.clone().unwrap_or_default();
+            let date = self.availability_date.clone();
+            if let Some(ref mut skedda) = self.skedda {
+                match skedda.create_booking(&space_id, &date, &start_time, &end_time, "Booking") {
+                    Ok(()) => {
+                        self.current_view = ViewState::Confirmation;
+                    }
+                    Err(e) => {
+                        self.booking_error = Some(e.to_string());
+                    }
+                }
+            }
+        } else {
+            self.booking_error = Some("Invalid time selection".to_string());
+        }
     }
 
     /// Handles the tick event of the terminal.

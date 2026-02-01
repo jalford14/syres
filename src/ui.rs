@@ -1,13 +1,13 @@
+use chrono::TimeDelta;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Masked, Span, Text},
-    widgets::{Block, BorderType, Clear, List, Paragraph, Tabs},
+    widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Tabs},
 };
 
-use crate::app::{App, LoginField, LoginMode, ViewState};
-use crate::skedda::AvailableSlot;
+use crate::app::{App, BookingFocus, LoginField, LoginMode, ViewState};
 
 /// Renders the user interface.
 pub fn render(app: &mut App, frame: &mut Frame) {
@@ -175,7 +175,7 @@ fn render_email_password_form(app: &App, frame: &mut Frame, area: Rect) {
         let masked_val = Masked::new(app.password_input.as_str(), '\u{2022}')
             .value()
             .to_string();
-        Paragraph::new(format!("{}\u{2588}", masked_val))
+        Paragraph::new(format!("{masked_val}\u{2588}"))
     } else {
         Paragraph::new(Text::from(Masked::new(
             app.password_input.as_str(),
@@ -233,7 +233,7 @@ fn render_cookie_form(app: &App, frame: &mut Frame, area: Rect) {
             .chars()
             .take(8)
             .collect();
-        Paragraph::new(format!("{}  (cookie set)", masked_val))
+        Paragraph::new(format!("{masked_val}  (cookie set)"))
     };
     let cookie_input = cookie_input
         .block(cookie_block)
@@ -277,7 +277,7 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded);
 
-    let text = format!("Make a booking at Switchyards");
+    let text = "Make a booking at Switchyards".to_string();
 
     let paragraph = Paragraph::new(text)
         .block(block)
@@ -286,101 +286,271 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
         .centered();
 
     frame.render_widget(paragraph, frame.area());
-    frame.render_stateful_widget(locations_list, frame.area(), &mut app.list_state);
-}
-
-fn format_slot(s: &AvailableSlot) -> String {
-    let t1 = s.start.split('T').nth(1).unwrap_or(&s.start);
-    let t2 = s.end.split('T').nth(1).unwrap_or(&s.end);
-    format!("{} - {}", t1, t2)
+    frame.render_stateful_widget(locations_list, frame.area(), &mut app.location_list_state);
 }
 
 fn render_booking_form(app: &mut App, frame: &mut Frame) {
-    let spaces_list = List::new(
-        app.selected_location_space_ids
-            .iter()
-            .map(|space_id| {
-                app.venue_space_ids
-                    .get(space_id)
-                    .cloned()
-                    .unwrap_or_else(|| space_id.clone())
-            })
-            .collect::<Vec<_>>(),
-    )
-    .block(
-        Block::default()
-            .title("Spaces")
-            .title_alignment(Alignment::Center)
-            .border_type(BorderType::Rounded),
-    )
-    .highlight_style(Color::Yellow)
-    .highlight_symbol(">> ");
-
-    let space_name = app
-        .selected_space_id
-        .as_ref()
-        .and_then(|id| app.venue_space_ids.get(id))
-        .cloned()
-        .unwrap_or_else(|| app.selected_space_id.clone().unwrap_or_default());
-    let avail_title = if app.availability_date.is_empty() {
-        "Available times".to_string()
-    } else {
-        format!("Available: {} on {}", space_name, app.availability_date)
-    };
-    let slot_lines: Vec<_> = if app.available_slots.is_empty() {
-        vec!["No availability data".to_string()]
-    } else {
-        app.available_slots.iter().map(format_slot).collect()
-    };
-    let availability_list = List::new(slot_lines)
-        .block(
-            Block::default()
-                .title(avail_title)
-                .title_alignment(Alignment::Center)
-                .border_type(BorderType::Rounded),
-        );
-
     let area = frame.area();
-    let popup_area = centered_rect(80, 70, area);
+    let popup_area = centered_rect(90, 85, area);
 
     frame.render_widget(Clear, popup_area);
 
-    let chunks = Layout::default()
+    // Vertical: title | panels | status
+    let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),
-            Constraint::Min(5),
-            Constraint::Min(5),
+            Constraint::Length(3),  // title
+            Constraint::Min(8),    // panels
+            Constraint::Length(3), // status bar
         ])
         .split(popup_area);
 
-    let title = format!(
-        "Booking Form - {}",
-        app.selected_location
-            .as_ref()
-            .unwrap_or(&"Unknown".to_string())
-    );
+    // -- Title bar --
+    render_booking_title(app, frame, outer_chunks[0]);
+
+    // Horizontal split for two panels
+    let panel_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(35),
+            Constraint::Percentage(65),
+        ])
+        .split(outer_chunks[1]);
+
+    // -- Left panel: Spaces --
+    render_spaces_panel(app, frame, panel_chunks[0]);
+
+    // -- Right panel: Time Slots --
+    render_timeslots_panel(app, frame, panel_chunks[1]);
+
+    // -- Status bar --
+    render_booking_status(app, frame, outer_chunks[2]);
+}
+
+fn render_booking_title(app: &App, frame: &mut Frame, area: Rect) {
+    let location = app.selected_location.as_deref().unwrap_or("Unknown");
+    let title = format!(" Booking - {} - {} ", location, app.availability_date);
+    let block = Block::bordered()
+        .title(title)
+        .title_alignment(Alignment::Center)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Blue));
+    frame.render_widget(block, area);
+}
+
+fn render_spaces_panel(app: &mut App, frame: &mut Frame, area: Rect) {
+    let focused = app.booking_focus == BookingFocus::Spaces;
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+
+    let items: Vec<ListItem> = app
+        .selected_location_space_ids
+        .iter()
+        .map(|space_id| {
+            let name = app
+                .venue_space_ids
+                .get(space_id)
+                .cloned()
+                .unwrap_or_else(|| space_id.clone());
+            ListItem::new(name)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::bordered()
+                .title(" Spaces ")
+                .title_alignment(Alignment::Center)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    frame.render_stateful_widget(list, area, &mut app.spaces_list_state);
+}
+
+fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
+    let focused = app.booking_focus == BookingFocus::TimeSlots;
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+
+    let cursor = app.timeslots_list_state.selected().unwrap_or(0);
+    let duration = app.selection_duration;
+
+    // Build the title showing the selected range
+    let title = if let Some((start, end)) = app.selected_time_range() {
+        let total_min = app.selection_duration * 15;
+        let display = if total_min >= 60 && total_min % 60 == 0 {
+            format!("{}h", total_min / 60)
+        } else if total_min >= 60 {
+            format!("{}h {}m", total_min / 60, total_min % 60)
+        } else {
+            format!("{total_min}m")
+        };
+        format!(
+            " {} - {} ({}) ",
+            start.format("%I:%M %p"),
+            end.format("%I:%M %p"),
+            display
+        )
+    } else {
+        " Time Slots ".to_string()
+    };
+
+    // Build lines for each time increment
+    let lines: Vec<Line> = if app.time_increments.is_empty() {
+        vec![Line::from(Span::styled(
+            "  No available times",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    } else {
+        let mut result = Vec::new();
+        let mut prev_block: Option<usize> = None;
+
+        for (i, inc) in app.time_increments.iter().enumerate() {
+            // Insert separator between blocks
+            if let Some(pb) = prev_block {
+                if inc.block_index != pb {
+                    result.push(Line::from(Span::styled(
+                        "  ---- booked ----",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            prev_block = Some(inc.block_index);
+
+            let end_time = inc.time + TimeDelta::minutes(15);
+            let label = format!(
+                "  {} - {}",
+                inc.time.format("%I:%M %p"),
+                end_time.format("%I:%M %p")
+            );
+
+            let cursor_block = app
+                .time_increments
+                .get(cursor)
+                .map(|t| t.block_index);
+            let in_selection = i >= cursor
+                && i < cursor + duration
+                && Some(inc.block_index) == cursor_block;
+
+            let is_cursor_line = i == cursor;
+
+            let style = if in_selection && focused {
+                if is_cursor_line {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                }
+            } else if is_cursor_line && focused {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            result.push(Line::from(Span::styled(label, style)));
+        }
+        result
+    };
+
+    // Calculate scroll offset to keep cursor visible
+    let visible_height = area.height.saturating_sub(2) as usize; // minus borders
+    let total_lines = lines.len();
+    // Account for separator lines when computing scroll position
+    let separator_count_before_cursor: usize = {
+        let mut count = 0;
+        let mut prev: Option<usize> = None;
+        for (i, inc) in app.time_increments.iter().enumerate() {
+            if let Some(pb) = prev {
+                if inc.block_index != pb {
+                    count += 1;
+                }
+            }
+            prev = Some(inc.block_index);
+            if i == cursor {
+                break;
+            }
+        }
+        count
+    };
+    let visual_cursor = cursor + separator_count_before_cursor;
+    let scroll_offset = if visible_height > 0 && visual_cursor >= visible_height {
+        visual_cursor.saturating_sub(visible_height / 2)
+    } else {
+        0
+    };
+    let scroll_offset = scroll_offset.min(total_lines.saturating_sub(visible_height));
 
     let block = Block::bordered()
         .title(title)
         .title_alignment(Alignment::Center)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color));
 
-    let content = vec![
-        Line::from(""),
-        Line::from("Select a space. Available times (for the first space) are shown below."),
-        Line::from(""),
-        Line::from("Press Enter to confirm booking"),
-        Line::from("Press Esc to go back"),
-    ];
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .scroll((scroll_offset as u16, 0));
 
-    let paragraph = Paragraph::new(Text::from(content))
+    frame.render_widget(paragraph, area);
+}
+
+fn render_booking_status(app: &App, frame: &mut Frame, area: Rect) {
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(Color::DarkGray);
+
+    let mut lines = Vec::new();
+
+    // Show error if present
+    if let Some(ref err) = app.booking_error {
+        lines.push(Line::from(Span::styled(
+            err.as_str(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    // Help text based on focus
+    let help = match app.booking_focus {
+        BookingFocus::Spaces => Line::from(vec![
+            Span::styled("j/k", key_style),
+            Span::styled(" navigate  ", desc_style),
+            Span::styled("Tab/Enter", key_style),
+            Span::styled(" select times  ", desc_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" back", desc_style),
+        ]),
+        BookingFocus::TimeSlots => Line::from(vec![
+            Span::styled("j/k", key_style),
+            Span::styled(" move  ", desc_style),
+            Span::styled("h/l", key_style),
+            Span::styled(" duration  ", desc_style),
+            Span::styled("Enter", key_style),
+            Span::styled(" book  ", desc_style),
+            Span::styled("Tab/Esc", key_style),
+            Span::styled(" spaces", desc_style),
+        ]),
+    };
+    lines.push(help);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let paragraph = Paragraph::new(lines)
         .block(block)
         .alignment(Alignment::Center);
 
-    frame.render_widget(paragraph, chunks[0]);
-    frame.render_stateful_widget(spaces_list, chunks[1], &mut app.list_state);
-    frame.render_widget(availability_list, chunks[2]);
+    frame.render_widget(paragraph, area);
 }
 
 fn render_confirmation(app: &mut App, frame: &mut Frame) {
@@ -390,20 +560,42 @@ fn render_confirmation(app: &mut App, frame: &mut Frame) {
     frame.render_widget(Clear, popup_area);
 
     let block = Block::bordered()
-        .title("Booking Confirmed!")
+        .title(" Booking Confirmed! ")
         .title_alignment(Alignment::Center)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Green));
+
+    let space_name = app
+        .selected_space_id
+        .as_ref()
+        .and_then(|id| app.venue_space_ids.get(id))
+        .cloned()
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let time_range = if let Some((start, end)) = app.selected_time_range() {
+        format!(
+            "{} - {}",
+            start.format("%I:%M %p"),
+            end.format("%I:%M %p")
+        )
+    } else {
+        "N/A".to_string()
+    };
 
     let content = vec![
         Line::from(""),
         Line::from(format!(
             "Your booking at {} has been confirmed!",
             app.selected_location
-                .as_ref()
-                .unwrap_or(&"Unknown".to_string())
+                .as_deref()
+                .unwrap_or("Unknown")
         )),
         Line::from(""),
-        Line::from("Press Esc to return to location selection"),
+        Line::from(format!("Space: {space_name}")),
+        Line::from(format!("Date: {}", app.availability_date)),
+        Line::from(format!("Time: {time_range}")),
+        Line::from(""),
+        Line::from("Press Enter or Esc to return"),
     ];
 
     let paragraph = Paragraph::new(Text::from(content))
