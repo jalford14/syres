@@ -8,10 +8,15 @@ use ratatui::{
 };
 
 use crate::app::{App, BookingFocus, LoginField, LoginMode, ViewState};
+use crate::backdrop;
 use crate::map_ui;
 use crate::theme;
 
 pub fn render(app: &mut App, frame: &mut Frame) {
+    // Permanent café backdrop behind all views
+    let area = frame.area();
+    backdrop::render_backdrop(frame, area);
+
     match app.current_view {
         ViewState::Login => render_login(app, frame),
         ViewState::LocationSelection => render_location_selection(app, frame),
@@ -250,9 +255,14 @@ fn render_cookie_form(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_location_selection(app: &mut App, frame: &mut Frame) {
+    let area = frame.area();
+    let popup_area = centered_rect(50, 60, area);
+
+    frame.render_widget(Clear, popup_area);
+
     let locations_list = List::new(app.locations.clone())
         .block(
-            Block::default()
+            Block::bordered()
                 .title("Locations")
                 .title_alignment(Alignment::Center)
                 .border_type(BorderType::Rounded),
@@ -269,11 +279,10 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
     let paragraph = Paragraph::new("Make a booking at Switchyards")
         .block(block)
         .fg(theme::LAMP)
-        .bg(theme::WARM_BLACK)
         .centered();
 
-    frame.render_widget(paragraph, frame.area());
-    frame.render_stateful_widget(locations_list, frame.area(), &mut app.location_list_state);
+    frame.render_widget(paragraph, popup_area);
+    frame.render_stateful_widget(locations_list, popup_area, &mut app.location_list_state);
 }
 
 fn render_booking_form(app: &mut App, frame: &mut Frame) {

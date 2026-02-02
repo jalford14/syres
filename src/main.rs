@@ -3,6 +3,7 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 
 pub mod app;
+pub mod backdrop;
 pub mod credentials;
 pub mod event;
 pub mod map_ui;
