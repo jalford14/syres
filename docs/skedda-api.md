@@ -2,6 +2,21 @@
 
 Reference documentation for the Skedda booking platform API. All endpoints use cookie-based session auth and require a CSRF token.
 
+## Hierarchy
+
+The hierarchy is:
+
+```
+  Venue 72329 ("Switchyards Atlanta")
+    └── Space Tags (locations)
+          ├── "Buckhead"        → spaceIds: [1077113, 1077114, ...]
+          ├── "Decatur"         → spaceIds: [1077096, 1077097,  ...]
+          ├── "Avondale Estates" → spaceIds: [1423126, 1423127, ...]
+          ├── "Downtown"        → spaceIds: [1025335, 1025334, ...]
+          └── ... (13 locations total)
+                └── Spaces (individual rooms/booths)
+```
+
 ## Base URL
 
 ```

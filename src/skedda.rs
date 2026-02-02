@@ -7,9 +7,9 @@ use reqwest::{
 };
 use scraper::{Html, Selector};
 use std::collections::HashMap;
-use std::env;
-use std::fs;
 use std::sync::Arc;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 /// A time slot that is available to book.
 #[derive(Debug, Clone)]
@@ -38,6 +38,7 @@ pub struct Skedda {
     cached_bookings: HashMap<String, Vec<serde_json::Value>>,
     cached_csrf_token: Option<String>,
     pub venue_id: Option<String>,
+    pub venue_user_id: Option<String>,
 }
 
 impl Skedda {
@@ -59,6 +60,7 @@ impl Skedda {
             cached_bookings: HashMap::new(),
             cached_csrf_token: None,
             venue_id: None,
+            venue_user_id: None,
         })
     }
 
@@ -190,13 +192,6 @@ impl Skedda {
             .json::<serde_json::Value>()
             .context("Failed to parse JSON response from /webs")?;
 
-        // Dump /webs response for debugging when SYRES_DEBUG_WEBS=1
-        if env::var("SYRES_DEBUG_WEBS").is_ok() {
-            if let Ok(s) = serde_json::to_string_pretty(&response_json) {
-                let _ = fs::write("webs_debug.json", s);
-            }
-        }
-
         self.cached_webs_data = Some(response_json.clone());
         Ok(response_json)
     }
@@ -287,6 +282,22 @@ impl Skedda {
             }
         }
 
+        // Extract venue user ID from the /webs response
+        // Try common paths where the user ID might live
+        if let Some(id) = webs_data.get("venueUserId").and_then(Self::id_from_value) {
+            self.venue_user_id = Some(id);
+        } else if let Some(web) = webs_data.get("web") {
+            if let Some(id) = web.get("venueUserId").and_then(Self::id_from_value) {
+                self.venue_user_id = Some(id);
+            } else if let Some(id) = web.get("venueuser").and_then(Self::id_from_value) {
+                self.venue_user_id = Some(id);
+            } else if let Some(id) = web.get("userId").and_then(Self::id_from_value) {
+                self.venue_user_id = Some(id);
+            }
+        }
+        if let Some(id) = webs_data.get("venueuser").and_then(Self::id_from_value) {
+            self.venue_user_id = Some(id);
+        }
         self.venue_space_ids = venue_space_ids.clone();
         venue_space_ids
     }
@@ -375,7 +386,7 @@ impl Skedda {
             .client
             .get(&url)
             .headers(headers)
-            .query(&[("start", &start), ("end", &end)])
+            .query(&[("end", &end), ("start", &start)])
             .send()
             .context("Failed to request bookings")?;
 
@@ -383,15 +394,14 @@ impl Skedda {
             anyhow::bail!("Bookings API returned {}", response.status());
         }
 
-        let json: serde_json::Value = response
-            .json()
-            .context("Failed to parse bookings JSON")?;
+        let response_text = response
+            .text()
+            .context("Failed to read bookings response")?;
 
-        if env::var("SYRES_DEBUG_BOOKINGS").is_ok() {
-            if let Ok(s) = serde_json::to_string_pretty(&json) {
-                let _ = fs::write("bookings_debug.json", s);
-            }
-        }
+        let _ = std::fs::write("bookings_debug.json", &response_text);
+
+        let json: serde_json::Value = serde_json::from_str(&response_text)
+            .context("Failed to parse bookings JSON")?;
 
         let bookings = json["bookings"]
             .as_array()
@@ -409,19 +419,22 @@ impl Skedda {
         date: &str,
         start_time: &NaiveTime,
         end_time: &NaiveTime,
-        title: &str,
+        _title: &str,
     ) -> Result<()> {
         let csrf_token = self.get_booking_page()?;
         let url = format!("{}/bookings", self.base_url);
 
-        let venue_id: i64 = self
+        let venue_id = self
             .venue_id
             .as_ref()
             .context("No venue ID available")?
-            .parse()
-            .context("Invalid venue ID")?;
+            .clone();
 
-        let space_id_int: i64 = space_id.parse().context("Invalid space ID")?;
+        let venue_user_id = self
+            .venue_user_id
+            .as_ref()
+            .context("No venue user ID available — check webs_debug.json for the correct field")?
+            .clone();
 
         let start = format!("{}T{}", date, start_time.format("%H:%M:%S"));
         let end = format!("{}T{}", date, end_time.format("%H:%M:%S"));
@@ -430,11 +443,34 @@ impl Skedda {
             "booking": {
                 "start": start,
                 "end": end,
-                "title": title,
+                "title": serde_json::Value::Null,
                 "venue": venue_id,
-                "spaces": [space_id_int],
+                "venueuser": venue_user_id,
+                "spaces": [space_id.to_string()],
                 "type": 1,
-                "price": 0
+                "price": 0,
+                "availabilityStatus": 1,
+                "addConference": false,
+                "addOns": [],
+                "allowInviteOthers": false,
+                "arbitraryerrors": serde_json::Value::Null,
+                "attendees": [],
+                "chargeTransactionId": serde_json::Value::Null,
+                "conferenceLinkType": 0,
+                "createdDate": serde_json::Value::Null,
+                "customFields": [],
+                "decoupleBooking": serde_json::Value::Null,
+                "decoupleDate": serde_json::Value::Null,
+                "endOfLastOccurrence": serde_json::Value::Null,
+                "hideAttendees": true,
+                "invoiceId": serde_json::Value::Null,
+                "lockInMargin": serde_json::Value::Null,
+                "paymentStatus": 0,
+                "piId": serde_json::Value::Null,
+                "recurrenceRule": serde_json::Value::Null,
+                "stripPrivateEventDetails": false,
+                "syncType": serde_json::Value::Null,
+                "unrecognizedOrganizer": false
             }
         });
 
@@ -453,15 +489,16 @@ impl Skedda {
             .send()
             .context("Failed to create booking")?;
 
-        if response.status().is_success() {
+        let status = response.status();
+        let response_text = response
+            .text()
+            .context("Failed to read booking response")?;
+
+        if status.is_success() {
             // Invalidate bookings cache for this date
             self.cached_bookings.remove(date);
             return Ok(());
         }
-
-        let response_text = response
-            .text()
-            .context("Failed to read booking response")?;
 
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response_text) {
             if let Some(errors) = json["errors"].as_array() {
@@ -474,7 +511,7 @@ impl Skedda {
                 }
             }
         }
-        anyhow::bail!("Booking failed: {}", response_text);
+        anyhow::bail!("Booking failed (HTTP {status}): {response_text}");
     }
 
     /// Calculate available time slots for a space by finding gaps in bookings.
@@ -485,12 +522,20 @@ impl Skedda {
     ) -> Vec<AvailableSlot> {
         let open = NaiveTime::from_hms_opt(6, 0, 0).unwrap();
         let close = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
+        let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open("availability_debug.json")
+        .unwrap();
 
         // Filter bookings to target space and parse start/end times
         let mut intervals: Vec<(NaiveTime, NaiveTime)> = Vec::new();
         for booking in bookings {
+            let _ = writeln!(file, "{}", &booking);
+
             // Check if booking belongs to this space
-            let belongs = if let Some(ids) = booking["spaceIds"].as_array() {
+            let belongs = if let Some(ids) = booking["spaces"].as_array() {
                 ids.iter()
                     .any(|v| Self::id_from_value(v).as_deref() == Some(space_id))
             } else if let Some(id) = booking.get("spaceId").and_then(Self::id_from_value) {
@@ -566,6 +611,16 @@ impl Skedda {
 pub fn generate_time_increments(slots: &[AvailableSlot]) -> Vec<TimeIncrement> {
     let mut increments = Vec::new();
     for (block_index, slot) in slots.iter().enumerate() {
+        let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open("availability_debug.txt")
+        .unwrap();
+
+        let _ = writeln!(file, "{}", &slot.start);
+        let _ = writeln!(file, "{}", &slot.end);
+
         let start = NaiveTime::parse_from_str(&slot.start, "%H:%M")
             .or_else(|_| NaiveTime::parse_from_str(&slot.start, "%H:%M:%S"))
             .unwrap_or_else(|_| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
