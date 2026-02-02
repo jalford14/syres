@@ -5,6 +5,8 @@ use crossterm::execute;
 pub mod app;
 pub mod credentials;
 pub mod event;
+pub mod map_ui;
+pub mod maps;
 pub mod skedda;
 pub mod ui;
 

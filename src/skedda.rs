@@ -11,14 +11,12 @@ use std::sync::Arc;
 use std::fs::OpenOptions;
 use std::io::Write;
 
-/// A time slot that is available to book.
 #[derive(Debug, Clone)]
 pub struct AvailableSlot {
     pub start: String,
     pub end: String,
 }
 
-/// A single 15-minute time increment within an available slot.
 #[derive(Debug, Clone)]
 pub struct TimeIncrement {
     pub time: NaiveTime,
@@ -33,7 +31,6 @@ pub struct Skedda {
     pub venue_space_ids: HashMap<String, String>,
     pub selected_location_space_ids: Vec<String>,
     pub authenticated: bool,
-    // Caching
     cached_webs_data: Option<serde_json::Value>,
     cached_bookings: HashMap<String, Vec<serde_json::Value>>,
     cached_csrf_token: Option<String>,
@@ -64,8 +61,6 @@ impl Skedda {
         })
     }
 
-    /// Authenticate with Skedda using a session cookie.
-    ///
     /// Sets the X-Skedda-ApplicationCookie on the jar and verifies it
     /// by fetching the booking page.
     pub fn authenticate_with_cookie(&mut self, cookie_value: &str) -> Result<()> {
@@ -78,7 +73,6 @@ impl Skedda {
             &url,
         );
 
-        // Verify the cookie works by fetching the booking page
         let booking_url = format!("{}/booking", self.base_url);
         let response = self
             .client
@@ -102,13 +96,11 @@ impl Skedda {
         Ok(())
     }
 
-    /// Authenticate with Skedda using username/password.
-    ///
     /// Flow:
     /// 1. GET app.skedda.com/account/login — obtains CSRF cookie + token
     /// 2. POST app.skedda.com/logins — sends credentials with CSRF header
     pub fn authenticate(&mut self, username: &str, password: &str) -> Result<()> {
-        // Step 1: Fetch login page to get CSRF cookie + token
+        // Step 1
         let login_page_url = "https://app.skedda.com/account/login";
         let page_response = self
             .client
@@ -123,7 +115,7 @@ impl Skedda {
         let csrf_token = Self::extract_csrf_token(&html)
             .context("Failed to extract CSRF token from login page")?;
 
-        // Step 2: POST credentials with CSRF token
+        // Step 2
         let login_url = "https://app.skedda.com/logins";
         let body = serde_json::json!({
             "login": {
@@ -233,7 +225,6 @@ impl Skedda {
         Err(anyhow::anyhow!("CSRF token not found in HTML content"))
     }
 
-    /// Extract a string ID from a JSON value (handles both string and number).
     fn id_from_value(v: &serde_json::Value) -> Option<String> {
         v.as_str()
             .map(String::from)
@@ -243,12 +234,16 @@ impl Skedda {
     pub fn fetch_space_ids(&mut self) -> HashMap<String, String> {
         let mut venue_space_ids = HashMap::new();
         let webs_data = self.get_booking_data().unwrap();
+        let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open("webs_debug.json")
+        .unwrap();
+
+        let _ = writeln!(file, "{}", &webs_data);
 
         if let Some(items) = webs_data["spaces"].as_array() {
             for item in items {
-                if item.get("spaceIds").is_some() {
-                    continue;
-                }
                 let id = item.get("id").and_then(Self::id_from_value);
                 let name = item
                     .get("name")
@@ -261,48 +256,34 @@ impl Skedda {
         }
 
         if let Some(venues) = webs_data["venue"].as_array() {
-            if let Some(venue0) = venues.first() {
-                if let Some(id) = venue0.get("id").and_then(Self::id_from_value) {
-                    self.venue_id = Some(id);
-                }
-            }
             for venue in venues {
-                if let Some(spaces) = venue["spaces"].as_array() {
-                    for sp in spaces {
-                        let id = sp.get("id").and_then(Self::id_from_value);
-                        let name = sp
-                            .get("name")
-                            .and_then(serde_json::Value::as_str)
-                            .map(String::from);
-                        if let (Some(id), Some(name)) = (id, name) {
-                            venue_space_ids.insert(id, name);
+                if venue["name"] == "Switchyards Atlanta" {
+                    if let Some(id) = venue.get("id").and_then(Self::id_from_value) {
+                        self.venue_id = Some(id);
+                    }
+
+                    if let Some(spaces) = venue["spaces"].as_array() {
+                        for sp in spaces {
+                            let id = sp.get("id").and_then(Self::id_from_value);
+                            let name = sp
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .map(String::from);
+                            if let (Some(id), Some(name)) = (id, name) {
+                                venue_space_ids.insert(id, name);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Extract venue user ID from the /webs response
-        // Try common paths where the user ID might live
-        if let Some(id) = webs_data.get("venueUserId").and_then(Self::id_from_value) {
-            self.venue_user_id = Some(id);
-        } else if let Some(web) = webs_data.get("web") {
-            if let Some(id) = web.get("venueUserId").and_then(Self::id_from_value) {
-                self.venue_user_id = Some(id);
-            } else if let Some(id) = web.get("venueuser").and_then(Self::id_from_value) {
-                self.venue_user_id = Some(id);
-            } else if let Some(id) = web.get("userId").and_then(Self::id_from_value) {
-                self.venue_user_id = Some(id);
-            }
-        }
-        if let Some(id) = webs_data.get("venueuser").and_then(Self::id_from_value) {
-            self.venue_user_id = Some(id);
-        }
+        let id = webs_data.get("web").unwrap().get("venueuser").and_then(Self::id_from_value);
+        self.venue_user_id = id;
         self.venue_space_ids = venue_space_ids.clone();
         venue_space_ids
     }
 
-    /// Extract space IDs from a JSON array (handles both numeric and string IDs).
     fn space_ids_from_array(arr: &[serde_json::Value]) -> Vec<String> {
         arr.iter().filter_map(Self::id_from_value).collect()
     }

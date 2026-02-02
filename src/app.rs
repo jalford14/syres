@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use chrono::{Local, NaiveTime, TimeDelta};
 use crate::credentials::{self, Credentials};
 use crate::event::{AppEvent, Event, EventHandler};
+use crate::maps::{self, FloorMap};
 use crate::skedda::{self, AvailableSlot, Skedda, TimeIncrement};
 use crate::ui;
 
@@ -85,6 +86,9 @@ pub struct App<'a> {
     pub auth_error: Option<String>,
     // Persistent authenticated client
     pub skedda: Option<Skedda>,
+    // Map data
+    pub floor_maps: Vec<FloorMap>,
+    pub floor_map_index: Option<usize>,
 }
 
 impl Default for App<'_> {
@@ -118,6 +122,8 @@ impl Default for App<'_> {
             login_field_focus: LoginField::Username,
             auth_error: None,
             skedda: None,
+            floor_maps: Vec::new(),
+            floor_map_index: None,
         }
     }
 }
@@ -126,6 +132,7 @@ impl App<'_> {
     /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
         let mut app = Self::default();
+        app.floor_maps = maps::load_all_maps();
 
         // Try loading saved credentials
         if let Ok(Some(creds)) = credentials::load_credentials() {
@@ -414,6 +421,12 @@ impl App<'_> {
                             },
                         );
 
+                        // Load the floor map for this location
+                        self.floor_map_index = self
+                            .floor_maps
+                            .iter()
+                            .position(|m| m.name == location_name.replace('-', " "));
+
                         self.recalculate_availability();
                         self.current_view = ViewState::BookingForm;
                     }
@@ -587,6 +600,10 @@ impl App<'_> {
         } else {
             self.booking_error = Some("Invalid time selection".to_string());
         }
+    }
+
+    pub fn current_floor_map(&self) -> Option<&FloorMap> {
+        self.floor_map_index.and_then(|i| self.floor_maps.get(i))
     }
 
     /// Handles the tick event of the terminal.

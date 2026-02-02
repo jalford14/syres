@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::app::{App, BookingFocus, LoginField, LoginMode, ViewState};
+use crate::map_ui;
 
 /// Renders the user interface.
 pub fn render(app: &mut App, frame: &mut Frame) {
@@ -308,20 +309,24 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
     // -- Title bar --
     render_booking_title(app, frame, outer_chunks[0]);
 
-    // Horizontal split for two panels
+    // Horizontal split for three panels
     let panel_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(40),
             Constraint::Percentage(35),
-            Constraint::Percentage(65),
         ])
         .split(outer_chunks[1]);
 
     // -- Left panel: Spaces --
     render_spaces_panel(app, frame, panel_chunks[0]);
 
-    // -- Right panel: Time Slots --
+    // -- Middle panel: Time Slots --
     render_timeslots_panel(app, frame, panel_chunks[1]);
+
+    // -- Right panel: Map --
+    map_ui::render_map_panel(app, frame, panel_chunks[2]);
 
     // -- Status bar --
     render_booking_status(app, frame, outer_chunks[2]);
