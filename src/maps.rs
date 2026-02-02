@@ -38,7 +38,6 @@ pub fn load_all_maps() -> Vec<FloorMap> {
     for map_val in map_list {
         let name = map_val["name"].as_str().unwrap_or("").to_string();
 
-        // Parse viewBox: "0 0 W H"
         let vb_str = map_val["viewBox"].as_str().unwrap_or("0 0 100 100");
         let vb_parts: Vec<f64> = vb_str
             .split_whitespace()

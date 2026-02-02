@@ -129,12 +129,10 @@ impl Default for App<'_> {
 }
 
 impl App<'_> {
-    /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
         let mut app = Self::default();
         app.floor_maps = maps::load_all_maps();
 
-        // Try loading saved credentials
         if let Ok(Some(creds)) = credentials::load_credentials() {
             match creds {
                 Credentials::Password { username, password } => {

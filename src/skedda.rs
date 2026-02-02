@@ -234,13 +234,6 @@ impl Skedda {
     pub fn fetch_space_ids(&mut self) -> HashMap<String, String> {
         let mut venue_space_ids = HashMap::new();
         let webs_data = self.get_booking_data().unwrap();
-        let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open("webs_debug.json")
-        .unwrap();
-
-        let _ = writeln!(file, "{}", &webs_data);
 
         if let Some(items) = webs_data["spaces"].as_array() {
             for item in items {
@@ -379,8 +372,6 @@ impl Skedda {
             .text()
             .context("Failed to read bookings response")?;
 
-        let _ = std::fs::write("bookings_debug.json", &response_text);
-
         let json: serde_json::Value = serde_json::from_str(&response_text)
             .context("Failed to parse bookings JSON")?;
 
@@ -503,18 +494,10 @@ impl Skedda {
     ) -> Vec<AvailableSlot> {
         let open = NaiveTime::from_hms_opt(6, 0, 0).unwrap();
         let close = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
-        let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .create(true)
-        .open("availability_debug.json")
-        .unwrap();
 
         // Filter bookings to target space and parse start/end times
         let mut intervals: Vec<(NaiveTime, NaiveTime)> = Vec::new();
         for booking in bookings {
-            let _ = writeln!(file, "{}", &booking);
-
             // Check if booking belongs to this space
             let belongs = if let Some(ids) = booking["spaces"].as_array() {
                 ids.iter()
@@ -592,16 +575,6 @@ impl Skedda {
 pub fn generate_time_increments(slots: &[AvailableSlot]) -> Vec<TimeIncrement> {
     let mut increments = Vec::new();
     for (block_index, slot) in slots.iter().enumerate() {
-        let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .create(true)
-        .open("availability_debug.txt")
-        .unwrap();
-
-        let _ = writeln!(file, "{}", &slot.start);
-        let _ = writeln!(file, "{}", &slot.end);
-
         let start = NaiveTime::parse_from_str(&slot.start, "%H:%M")
             .or_else(|_| NaiveTime::parse_from_str(&slot.start, "%H:%M:%S"))
             .unwrap_or_else(|_| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
