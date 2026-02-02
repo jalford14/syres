@@ -8,8 +8,6 @@ use reqwest::{
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::fs::OpenOptions;
-use std::io::Write;
 
 #[derive(Debug, Clone)]
 pub struct AvailableSlot {

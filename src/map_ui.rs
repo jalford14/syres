@@ -1,7 +1,6 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
     symbols::Marker,
     text::{Line, Span},
     widgets::{
@@ -11,6 +10,7 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::theme;
 
 /// Render the map canvas into the given area, highlighting the rectangle
 /// whose `space_id` matches `app.selected_space_id`.
@@ -28,7 +28,7 @@ pub fn render_map_panel(app: &App, frame: &mut Frame, area: Rect) {
                     .title(" Map ")
                     .title_alignment(Alignment::Center)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(theme::unfocused_border()),
             )
             .x_bounds([0.0, vb_w])
             .y_bounds([0.0, vb_h])
@@ -44,9 +44,9 @@ pub fn render_map_panel(app: &App, frame: &mut Frame, area: Rect) {
                     let canvas_y = vb_h - rect.y - rect.h;
 
                     let color = if is_selected {
-                        Color::Yellow
+                        theme::LAMP
                     } else {
-                        Color::Cyan
+                        theme::OLIVE
                     };
 
                     ctx.draw(&CanvasRect {
@@ -68,11 +68,9 @@ pub fn render_map_panel(app: &App, frame: &mut Frame, area: Rect) {
                     let short = shorten_space_name(&space_name);
 
                     let style = if is_selected {
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
+                        theme::map_selected()
                     } else {
-                        Style::default().fg(Color::White)
+                        theme::map_unselected()
                     };
 
                     ctx.print(label_x, label_y, Line::from(Span::styled(short, style)));
@@ -88,7 +86,7 @@ pub fn render_map_panel(app: &App, frame: &mut Frame, area: Rect) {
                     .title(" Map ")
                     .title_alignment(Alignment::Center)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(theme::unfocused_border()),
             );
         frame.render_widget(msg, area);
     }

@@ -2,15 +2,15 @@ use chrono::TimeDelta;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::Stylize,
     text::{Line, Masked, Span, Text},
     widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Tabs},
 };
 
 use crate::app::{App, BookingFocus, LoginField, LoginMode, ViewState};
 use crate::map_ui;
+use crate::theme;
 
-/// Renders the user interface.
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.current_view {
         ViewState::Login => render_login(app, frame),
@@ -19,7 +19,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         ViewState::Confirmation => render_confirmation(app, frame),
     }
 }
-
 
 fn render_login(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
@@ -31,7 +30,7 @@ fn render_login(app: &mut App, frame: &mut Frame) {
         .title(" syres ")
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(theme::title_border());
 
     let inner = outer_block.inner(popup_area);
     frame.render_widget(outer_block, popup_area);
@@ -57,16 +56,12 @@ fn render_login(app: &mut App, frame: &mut Frame) {
     };
     let tab_block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(theme::unfocused_border());
     let tabs = Tabs::new(tab_titles)
         .block(tab_block)
         .select(mode_index)
-        .style(Style::default().fg(Color::DarkGray))
-        .highlight_style(
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
+        .style(theme::tab_inactive())
+        .highlight_style(theme::tab_highlight())
         .divider("\u{2502}");
     frame.render_widget(tabs, chunks[1]);
 
@@ -79,16 +74,14 @@ fn render_login(app: &mut App, frame: &mut Frame) {
     // -- Error message --
     if let Some(ref err) = app.auth_error {
         let error_msg = Paragraph::new(err.as_str())
-            .style(Style::default().fg(Color::Red))
+            .style(theme::error_text())
             .alignment(Alignment::Center);
         frame.render_widget(error_msg, chunks[5]);
     }
 
     // -- Help text --
-    let key_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(Color::DarkGray);
+    let key_style = theme::key_hint();
+    let desc_style = theme::dim_text();
     let help_lines = vec![
         Line::from(vec![
             Span::styled("\u{2190}/\u{2192}", key_style),
@@ -119,11 +112,9 @@ fn render_email_password_form(app: &App, frame: &mut Frame, area: Rect) {
     // Email label
     let email_focused = app.login_field_focus == LoginField::Username;
     let email_label_style = if email_focused {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+        theme::focused_label()
     } else {
-        Style::default().fg(Color::White)
+        theme::unfocused_label()
     };
     frame.render_widget(
         Paragraph::new("  Email").style(email_label_style),
@@ -132,9 +123,9 @@ fn render_email_password_form(app: &App, frame: &mut Frame, area: Rect) {
 
     // Email input
     let email_border_style = if email_focused {
-        Style::default().fg(Color::Yellow)
+        theme::focused_border()
     } else {
-        Style::default().fg(Color::DarkGray)
+        theme::unfocused_border()
     };
     let email_block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -146,17 +137,15 @@ fn render_email_password_form(app: &App, frame: &mut Frame, area: Rect) {
     };
     let email_input = Paragraph::new(email_display)
         .block(email_block)
-        .style(Style::default().fg(Color::White));
+        .style(theme::body_text());
     frame.render_widget(email_input, chunks[1]);
 
     // Password label
     let password_focused = app.login_field_focus == LoginField::Password;
     let password_label_style = if password_focused {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+        theme::focused_label()
     } else {
-        Style::default().fg(Color::White)
+        theme::unfocused_label()
     };
     frame.render_widget(
         Paragraph::new("  Password").style(password_label_style),
@@ -165,9 +154,9 @@ fn render_email_password_form(app: &App, frame: &mut Frame, area: Rect) {
 
     // Password input (masked)
     let password_border_style = if password_focused {
-        Style::default().fg(Color::Yellow)
+        theme::focused_border()
     } else {
-        Style::default().fg(Color::DarkGray)
+        theme::unfocused_border()
     };
     let password_block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -185,7 +174,7 @@ fn render_email_password_form(app: &App, frame: &mut Frame, area: Rect) {
     };
     let password_input = password_input
         .block(password_block)
-        .style(Style::default().fg(Color::White));
+        .style(theme::body_text());
     frame.render_widget(password_input, chunks[4]);
 }
 
@@ -203,11 +192,9 @@ fn render_cookie_form(app: &App, frame: &mut Frame, area: Rect) {
     // Cookie label
     let cookie_focused = app.login_field_focus == LoginField::Cookie;
     let cookie_label_style = if cookie_focused {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+        theme::focused_label()
     } else {
-        Style::default().fg(Color::White)
+        theme::unfocused_label()
     };
     frame.render_widget(
         Paragraph::new("  X-Skedda-ApplicationCookie").style(cookie_label_style),
@@ -216,9 +203,9 @@ fn render_cookie_form(app: &App, frame: &mut Frame, area: Rect) {
 
     // Cookie input
     let cookie_border_style = if cookie_focused {
-        Style::default().fg(Color::Yellow)
+        theme::focused_border()
     } else {
-        Style::default().fg(Color::DarkGray)
+        theme::unfocused_border()
     };
     let cookie_block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -238,25 +225,25 @@ fn render_cookie_form(app: &App, frame: &mut Frame, area: Rect) {
     };
     let cookie_input = cookie_input
         .block(cookie_block)
-        .style(Style::default().fg(Color::White));
+        .style(theme::body_text());
     frame.render_widget(cookie_input, chunks[1]);
 
     let instructions = vec![
         Line::from(Span::styled(
             "  To get your session cookie:",
-            Style::default().fg(Color::DarkGray),
+            theme::dim_text(),
         )),
         Line::from(Span::styled(
             "  1. Log in at switchyards.skedda.com with Oauth",
-            Style::default().fg(Color::DarkGray),
+            theme::dim_text(),
         )),
         Line::from(Span::styled(
             "  2. Open Dev Tools \u{2192} Application \u{2192} Cookies",
-            Style::default().fg(Color::DarkGray),
+            theme::dim_text(),
         )),
         Line::from(Span::styled(
             "  3. Copy the X-Skedda-ApplicationCookie value",
-            Style::default().fg(Color::DarkGray),
+            theme::dim_text(),
         )),
     ];
     frame.render_widget(Paragraph::new(instructions), chunks[3]);
@@ -270,20 +257,19 @@ fn render_location_selection(app: &mut App, frame: &mut Frame) {
                 .title_alignment(Alignment::Center)
                 .border_type(BorderType::Rounded),
         )
-        .highlight_style(Color::Yellow)
+        .highlight_style(theme::selected_item())
         .highlight_symbol(">> ");
 
     let block = Block::bordered()
         .title("syres")
         .title_alignment(Alignment::Center)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Rounded)
+        .border_style(theme::title_border());
 
-    let text = "Make a booking at Switchyards".to_string();
-
-    let paragraph = Paragraph::new(text)
+    let paragraph = Paragraph::new("Make a booking at Switchyards")
         .block(block)
-        .fg(Color::Blue)
-        .bg(Color::Black)
+        .fg(theme::LAMP)
+        .bg(theme::WARM_BLACK)
         .centered();
 
     frame.render_widget(paragraph, frame.area());
@@ -339,13 +325,13 @@ fn render_booking_title(app: &App, frame: &mut Frame, area: Rect) {
         .title(title)
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(theme::title_border());
     frame.render_widget(block, area);
 }
 
 fn render_spaces_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     let focused = app.booking_focus == BookingFocus::Spaces;
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let border_style = if focused { theme::focused_border() } else { theme::unfocused_border() };
 
     let items: Vec<ListItem> = app
         .selected_location_space_ids
@@ -366,14 +352,9 @@ fn render_spaces_panel(app: &mut App, frame: &mut Frame, area: Rect) {
                 .title(" Spaces ")
                 .title_alignment(Alignment::Center)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(border_color)),
+                .border_style(border_style),
         )
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(theme::selected_item())
         .highlight_symbol(">> ");
 
     frame.render_stateful_widget(list, area, &mut app.spaces_list_state);
@@ -381,7 +362,7 @@ fn render_spaces_panel(app: &mut App, frame: &mut Frame, area: Rect) {
 
 fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     let focused = app.booking_focus == BookingFocus::TimeSlots;
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let border_style = if focused { theme::focused_border() } else { theme::unfocused_border() };
 
     let cursor = app.timeslots_list_state.selected().unwrap_or(0);
     let duration = app.selection_duration;
@@ -410,7 +391,7 @@ fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
     let lines: Vec<Line> = if app.time_increments.is_empty() {
         vec![Line::from(Span::styled(
             "  No available times",
-            Style::default().fg(Color::DarkGray),
+            theme::dim_text(),
         ))]
     } else {
         let mut result = Vec::new();
@@ -422,7 +403,7 @@ fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
                 if inc.block_index != pb {
                     result.push(Line::from(Span::styled(
                         "  ---- booked ----",
-                        Style::default().fg(Color::DarkGray),
+                        theme::dim_text(),
                     )));
                 }
             }
@@ -447,19 +428,14 @@ fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
 
             let style = if in_selection && focused {
                 if is_cursor_line {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    theme::time_selection_cursor()
                 } else {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    theme::time_selection()
                 }
             } else if is_cursor_line && focused {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme::cursor_line()
             } else {
-                Style::default().fg(Color::White)
+                theme::body_text()
             };
 
             result.push(Line::from(Span::styled(label, style)));
@@ -499,7 +475,7 @@ fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         .title(title)
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
+        .border_style(border_style);
 
     let paragraph = Paragraph::new(lines)
         .block(block)
@@ -509,10 +485,8 @@ fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_booking_status(app: &App, frame: &mut Frame, area: Rect) {
-    let key_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(Color::DarkGray);
+    let key_style = theme::key_hint();
+    let desc_style = theme::dim_text();
 
     let mut lines = Vec::new();
 
@@ -520,7 +494,7 @@ fn render_booking_status(app: &App, frame: &mut Frame, area: Rect) {
     if let Some(ref err) = app.booking_error {
         lines.push(Line::from(Span::styled(
             err.as_str(),
-            Style::default().fg(Color::Red),
+            theme::error_text(),
         )));
     }
 
@@ -549,7 +523,7 @@ fn render_booking_status(app: &App, frame: &mut Frame, area: Rect) {
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(theme::unfocused_border());
 
     let paragraph = Paragraph::new(lines)
         .block(block)
@@ -568,7 +542,7 @@ fn render_confirmation(app: &mut App, frame: &mut Frame) {
         .title(" Booking Confirmed! ")
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Green));
+        .border_style(theme::confirmation_border());
 
     let space_name = app
         .selected_space_id
@@ -605,6 +579,7 @@ fn render_confirmation(app: &mut App, frame: &mut Frame) {
 
     let paragraph = Paragraph::new(Text::from(content))
         .block(block)
+        .style(theme::body_text())
         .alignment(Alignment::Center);
 
     frame.render_widget(paragraph, popup_area);

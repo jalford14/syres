@@ -8,6 +8,7 @@ pub mod event;
 pub mod map_ui;
 pub mod maps;
 pub mod skedda;
+pub mod theme;
 pub mod ui;
 
 fn main() -> color_eyre::Result<()> {
