@@ -1,9 +1,8 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Color,
     symbols::Marker,
-    text::{Line, Span},
     widgets::canvas::{Canvas, Line as CanvasLine, Rectangle as CanvasRect},
 };
 
@@ -20,7 +19,6 @@ const PLANT: Color = Color::Rgb(48, 58, 40);
 const ACCENT: Color = Color::Rgb(60, 50, 35);
 const FLOOR_PLANK: Color = Color::Rgb(40, 36, 30);
 const FLOOR_DIM: Color = Color::Rgb(35, 32, 27);
-const LABEL_COLOR: Color = Color::Rgb(55, 48, 38);
 
 /// Render a 2D line-drawing of a coworking café interior as a permanent
 /// backdrop behind all UI views.
@@ -109,126 +107,60 @@ pub fn render_backdrop(frame: &mut Frame, area: Rect) {
                     x1: x,
                     y1: 90.0,
                     x2: x,
-                    y2: 77.0,
+                    y2: 82.0,
                     color: STRUCTURE_DIM,
                 });
                 // Shade
                 ctx.draw(&CanvasLine {
                     x1: x - 5.0,
-                    y1: 77.0,
+                    y1: 82.0,
                     x2: x + 5.0,
-                    y2: 77.0,
+                    y2: 82.0,
                     color: LIGHT_GLOW,
                 });
                 ctx.draw(&CanvasLine {
                     x1: x - 5.0,
-                    y1: 77.0,
+                    y1: 82.0,
                     x2: x - 2.0,
-                    y2: 74.0,
+                    y2: 79.0,
                     color: LIGHT_GLOW,
                 });
                 ctx.draw(&CanvasLine {
                     x1: x + 5.0,
-                    y1: 77.0,
+                    y1: 82.0,
                     x2: x + 2.0,
-                    y2: 74.0,
+                    y2: 79.0,
                     color: LIGHT_GLOW,
                 });
                 // Bulb
                 ctx.draw(&CanvasLine {
                     x1: x - 1.0,
-                    y1: 75.0,
+                    y1: 80.0,
                     x2: x + 1.0,
-                    y2: 75.0,
+                    y2: 80.0,
                     color: LIGHT_GLOW,
                 });
             }
 
-            // ── Bookshelf (far left wall) ───────────────────────
+            // ── Coffee Counter (far left) ─────────────────────
             ctx.draw(&CanvasRect {
-                x: 8.0,
-                y: 30.0,
-                width: 22.0,
-                height: 52.0,
-                color: FURNITURE,
-            });
-            // Shelf dividers
-            for &y in &[40.0, 50.0, 60.0, 70.0] {
-                ctx.draw(&CanvasLine {
-                    x1: 8.0,
-                    y1: y,
-                    x2: 30.0,
-                    y2: y,
-                    color: FURNITURE,
-                });
-            }
-            // Book spines
-            for &shelf_y in &[31.0, 41.0, 51.0, 61.0, 71.0] {
-                let mut bx = 10.0;
-                while bx < 28.0 {
-                    let bh = 6.0 + ((bx * 7.3) % 3.0);
-                    ctx.draw(&CanvasLine {
-                        x1: bx,
-                        y1: shelf_y,
-                        x2: bx,
-                        y2: shelf_y + bh,
-                        color: ACCENT,
-                    });
-                    bx += 2.2;
-                }
-            }
-
-            // ── Phone Booth (Switchyards signature) ─────────────
-            ctx.draw(&CanvasRect {
-                x: 36.0,
+                x: 10.0,
                 y: 15.0,
-                width: 14.0,
-                height: 62.0,
-                color: FURNITURE,
-            });
-            // Door frame
-            ctx.draw(&CanvasLine {
-                x1: 40.0,
-                y1: 15.0,
-                x2: 40.0,
-                y2: 55.0,
-                color: FURNITURE_DIM,
-            });
-            ctx.draw(&CanvasLine {
-                x1: 46.0,
-                y1: 15.0,
-                x2: 46.0,
-                y2: 55.0,
-                color: FURNITURE_DIM,
-            });
-            // Glass panel
-            ctx.draw(&CanvasRect {
-                x: 41.0,
-                y: 35.0,
-                width: 4.0,
-                height: 18.0,
-                color: GLASS,
-            });
-
-            // ── Coffee Counter ──────────────────────────────────
-            ctx.draw(&CanvasRect {
-                x: 56.0,
-                y: 15.0,
-                width: 38.0,
+                width: 34.0,
                 height: 14.0,
                 color: FURNITURE,
             });
             // Counter top edge
             ctx.draw(&CanvasLine {
-                x1: 56.0,
+                x1: 10.0,
                 y1: 29.0,
-                x2: 94.0,
+                x2: 44.0,
                 y2: 29.0,
                 color: FURNITURE,
             });
             // Espresso machine
             ctx.draw(&CanvasRect {
-                x: 60.0,
+                x: 14.0,
                 y: 29.0,
                 width: 8.0,
                 height: 7.0,
@@ -236,22 +168,22 @@ pub fn render_backdrop(frame: &mut Frame, area: Rect) {
             });
             // Steam wand
             ctx.draw(&CanvasLine {
-                x1: 64.0,
+                x1: 18.0,
                 y1: 36.0,
-                x2: 64.0,
+                x2: 18.0,
                 y2: 39.0,
                 color: STRUCTURE_DIM,
             });
             // Cups on counter
             ctx.draw(&CanvasRect {
-                x: 72.0,
+                x: 26.0,
                 y: 29.0,
                 width: 3.0,
                 height: 3.0,
                 color: ACCENT,
             });
             ctx.draw(&CanvasRect {
-                x: 77.0,
+                x: 31.0,
                 y: 29.0,
                 width: 3.0,
                 height: 3.0,
@@ -259,7 +191,7 @@ pub fn render_backdrop(frame: &mut Frame, area: Rect) {
             });
 
             // Bar stools
-            for &sx in &[62.0, 72.0, 82.0] {
+            for &sx in &[20.0, 30.0, 38.0] {
                 // Pedestal
                 ctx.draw(&CanvasLine {
                     x1: sx,
@@ -288,44 +220,44 @@ pub fn render_backdrop(frame: &mut Frame, area: Rect) {
 
             // Small plant on counter
             ctx.draw(&CanvasRect {
-                x: 88.0,
+                x: 38.0,
                 y: 29.0,
                 width: 3.0,
                 height: 3.0,
                 color: ACCENT,
             });
             ctx.draw(&CanvasLine {
-                x1: 89.5,
+                x1: 39.5,
                 y1: 32.0,
-                x2: 87.0,
+                x2: 37.0,
                 y2: 38.0,
                 color: PLANT,
             });
             ctx.draw(&CanvasLine {
-                x1: 89.5,
+                x1: 39.5,
                 y1: 32.0,
-                x2: 92.0,
+                x2: 42.0,
                 y2: 37.0,
                 color: PLANT,
             });
             ctx.draw(&CanvasLine {
-                x1: 89.5,
+                x1: 39.5,
                 y1: 34.0,
-                x2: 86.0,
+                x2: 36.0,
                 y2: 40.0,
                 color: PLANT,
             });
 
             // ── Work Tables ─────────────────────────────────────
-            // Table 1
-            draw_table(ctx, 102.0, 15.0);
-            // Table 2
-            draw_table(ctx, 135.0, 15.0);
+            draw_table(ctx, 58.0, 15.0);
+            draw_table(ctx, 85.0, 15.0);
+            draw_table(ctx, 112.0, 15.0);
+            draw_table(ctx, 139.0, 15.0);
 
             // ── Wall Art ────────────────────────────────────────
             // Frame 1
             ctx.draw(&CanvasRect {
-                x: 60.0,
+                x: 6.0,
                 y: 50.0,
                 width: 16.0,
                 height: 20.0,
@@ -333,31 +265,16 @@ pub fn render_backdrop(frame: &mut Frame, area: Rect) {
             });
             // Inner mat
             ctx.draw(&CanvasRect {
-                x: 62.0,
+                x: 8.0,
                 y: 52.0,
-                width: 12.0,
+                width: 12.5,
                 height: 16.0,
-                color: FURNITURE_DIM,
-            });
-            // Frame 2
-            ctx.draw(&CanvasRect {
-                x: 82.0,
-                y: 53.0,
-                width: 12.0,
-                height: 16.0,
-                color: ACCENT,
-            });
-            ctx.draw(&CanvasRect {
-                x: 84.0,
-                y: 55.0,
-                width: 8.0,
-                height: 12.0,
                 color: FURNITURE_DIM,
             });
 
             // ── Clock ───────────────────────────────────────────
             ctx.draw(&CanvasRect {
-                x: 108.0,
+                x: 33.0,
                 y: 60.0,
                 width: 8.0,
                 height: 8.0,
@@ -365,17 +282,17 @@ pub fn render_backdrop(frame: &mut Frame, area: Rect) {
             });
             // Hour hand
             ctx.draw(&CanvasLine {
-                x1: 112.0,
+                x1: 37.0,
                 y1: 64.0,
-                x2: 112.0,
+                x2: 37.0,
                 y2: 67.0,
                 color: LIGHT_GLOW,
             });
             // Minute hand
             ctx.draw(&CanvasLine {
-                x1: 112.0,
+                x1: 37.0,
                 y1: 64.0,
-                x2: 114.5,
+                x2: 39.5,
                 y2: 64.0,
                 color: LIGHT_GLOW,
             });
@@ -496,24 +413,14 @@ pub fn render_backdrop(frame: &mut Frame, area: Rect) {
                 color: PLANT,
             });
 
-            // ── Area Rug ────────────────────────────────────────
+            // ── Area Rug (under all seating) ──────────────────
             ctx.draw(&CanvasRect {
-                x: 96.0,
+                x: 52.0,
                 y: 15.5,
-                width: 60.0,
+                width: 112.0,
                 height: 0.5,
                 color: ACCENT,
             });
-
-            // ── Signage ─────────────────────────────────────────
-            ctx.print(
-                100.0,
-                95.0,
-                Line::from(Span::styled(
-                    "S W I T C H Y A R D S",
-                    Style::default().fg(LABEL_COLOR),
-                )),
-            );
         });
 
     frame.render_widget(canvas, area);
