@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chrono::{Local, NaiveTime, TimeDelta};
+use chrono::{Local, NaiveDate, NaiveTime, TimeDelta};
 use crate::credentials::{self, Credentials};
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::maps::{self, FloorMap};
@@ -53,6 +53,7 @@ pub enum LoginField {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BookingFocus {
     Spaces,
+    DateSelection,
     TimeSlots,
 }
 
@@ -76,6 +77,9 @@ pub struct App<'a> {
     pub time_increments: Vec<TimeIncrement>,
     pub booking_focus: BookingFocus,
     pub selection_duration: usize,
+    pub week_dates: Vec<NaiveDate>,
+    pub week_availability: HashMap<String, Vec<AvailableSlot>>,
+    pub date_list_state: ListState,
     pub booking_error: Option<String>,
     // Login fields
     pub login_mode: LoginMode,
@@ -114,6 +118,9 @@ impl Default for App<'_> {
             time_increments: Vec::new(),
             booking_focus: BookingFocus::Spaces,
             selection_duration: 4,
+            week_dates: Vec::new(),
+            week_availability: HashMap::new(),
+            date_list_state: ListState::default(),
             booking_error: None,
             login_mode: LoginMode::EmailPassword,
             username_input: String::new(),
@@ -395,20 +402,21 @@ impl App<'_> {
                         self.booking_focus = BookingFocus::Spaces;
                         self.selection_duration = 4;
                         self.booking_error = None;
+                        self.availability_date = String::new();
+                        self.initialize_week_dates();
 
                         if let Some(ref mut skedda) = self.skedda {
                             skedda.fetch_space_ids();
                             self.venue_space_ids = skedda.venue_space_ids.clone();
                             self.selected_location_space_ids =
                                 skedda.fetch_location_space_ids(location_name);
-                            self.availability_date =
-                                Local::now().format("%Y-%m-%d").to_string();
                         } else {
                             self.venue_space_ids.clear();
                             self.selected_location_space_ids.clear();
                             self.available_slots = Vec::new();
                             self.selected_space_id = None;
-                            self.availability_date.clear();
+                            self.week_dates.clear();
+                            self.week_availability.clear();
                         }
 
                         self.spaces_list_state.select(
@@ -457,11 +465,41 @@ impl App<'_> {
                     }
                 }
                 KeyCode::Tab | KeyCode::Enter => {
-                    if !self.time_increments.is_empty() {
-                        self.booking_focus = BookingFocus::TimeSlots;
+                    if !self.week_dates.is_empty() {
+                        self.booking_focus = BookingFocus::DateSelection;
                     }
                 }
                 KeyCode::Esc | KeyCode::Char('q') => {
+                    self.current_view = ViewState::LocationSelection;
+                    self.selected_location = None;
+                    self.booking_error = None;
+                }
+                _ => {}
+            },
+            BookingFocus::DateSelection => match key_event.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let len = self.week_dates.len();
+                    if len > 0 {
+                        let sel = self.date_list_state.selected().unwrap_or(0);
+                        let new = if sel == 0 { len - 1 } else { sel - 1 };
+                        self.date_list_state.select(Some(new));
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let len = self.week_dates.len();
+                    if len > 0 {
+                        let sel = self.date_list_state.selected().unwrap_or(0);
+                        let new = if sel >= len - 1 { 0 } else { sel + 1 };
+                        self.date_list_state.select(Some(new));
+                    }
+                }
+                KeyCode::Enter => {
+                    self.select_date();
+                }
+                KeyCode::Esc | KeyCode::Tab => {
+                    self.booking_focus = BookingFocus::Spaces;
+                }
+                KeyCode::Char('q') => {
                     self.current_view = ViewState::LocationSelection;
                     self.selected_location = None;
                     self.booking_error = None;
@@ -500,7 +538,7 @@ impl App<'_> {
                     self.submit_booking();
                 }
                 KeyCode::Esc | KeyCode::Tab => {
-                    self.booking_focus = BookingFocus::Spaces;
+                    self.booking_focus = BookingFocus::DateSelection;
                 }
                 KeyCode::Char('q') => {
                     self.current_view = ViewState::LocationSelection;
@@ -524,24 +562,63 @@ impl App<'_> {
         Ok(())
     }
 
-    /// Recalculate availability for the currently selected space from cached bookings.
+    /// Set up the week dates starting from today.
+    fn initialize_week_dates(&mut self) {
+        let today = Local::now().date_naive();
+        self.week_dates = (0..7)
+            .map(|i| today + TimeDelta::days(i))
+            .collect();
+        self.date_list_state.select(Some(0));
+    }
+
+    /// Recalculate weekly availability for the currently selected space.
     fn recalculate_availability(&mut self) {
         if let Some(selected_idx) = self.spaces_list_state.selected() {
             if let Some(space_id) = self.selected_location_space_ids.get(selected_idx).cloned() {
-                let date = self.availability_date.clone();
+                self.selected_space_id = Some(space_id.clone());
+                self.week_availability.clear();
+
                 if let Some(ref mut skedda) = self.skedda {
-                    let bookings = skedda.fetch_bookings(&date).unwrap_or_default();
-                    self.available_slots =
-                        Skedda::calculate_availability(&space_id, &date, &bookings);
+                    for date in &self.week_dates {
+                        let date_str = date.format("%Y-%m-%d").to_string();
+                        let bookings = skedda.fetch_bookings(&date_str).unwrap_or_default();
+                        let slots =
+                            Skedda::calculate_availability(&space_id, &date_str, &bookings);
+                        self.week_availability.insert(date_str, slots);
+                    }
                 }
-                self.selected_space_id = Some(space_id);
+
+                // Clear time slot state — user must pick a date first
+                self.available_slots.clear();
+                self.time_increments.clear();
+                self.timeslots_list_state.select(None);
+            }
+        }
+    }
+
+    /// Select a date from the week picker and populate time slots.
+    fn select_date(&mut self) {
+        if let Some(selected) = self.date_list_state.selected() {
+            if let Some(date) = self.week_dates.get(selected) {
+                let date_str = date.format("%Y-%m-%d").to_string();
+                self.availability_date = date_str.clone();
+
+                self.available_slots = self
+                    .week_availability
+                    .get(&date_str)
+                    .cloned()
+                    .unwrap_or_default();
+
                 self.time_increments = skedda::generate_time_increments(&self.available_slots);
+
                 if self.time_increments.is_empty() {
                     self.timeslots_list_state.select(None);
                 } else {
                     self.timeslots_list_state.select(Some(0));
+                    self.selection_duration = 4;
                 }
                 self.clamp_duration();
+                self.booking_focus = BookingFocus::TimeSlots;
             }
         }
     }

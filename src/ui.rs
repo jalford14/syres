@@ -1,4 +1,4 @@
-use chrono::TimeDelta;
+use chrono::{Local, TimeDelta};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -10,6 +10,7 @@ use ratatui::{
 use crate::app::{App, BookingFocus, LoginField, LoginMode, ViewState};
 use crate::backdrop;
 use crate::map_ui;
+use crate::skedda;
 use crate::theme;
 
 pub fn render(app: &mut App, frame: &mut Frame) {
@@ -317,8 +318,12 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
     // -- Left panel: Spaces --
     render_spaces_panel(app, frame, panel_chunks[0]);
 
-    // -- Middle panel: Time Slots --
-    render_timeslots_panel(app, frame, panel_chunks[1]);
+    // -- Middle panel: Date picker or Time Slots --
+    if app.booking_focus == BookingFocus::TimeSlots {
+        render_timeslots_panel(app, frame, panel_chunks[1]);
+    } else {
+        render_date_picker_panel(app, frame, panel_chunks[1]);
+    }
 
     // -- Right panel: Map --
     map_ui::render_map_panel(app, frame, panel_chunks[2]);
@@ -329,7 +334,11 @@ fn render_booking_form(app: &mut App, frame: &mut Frame) {
 
 fn render_booking_title(app: &App, frame: &mut Frame, area: Rect) {
     let location = app.selected_location.as_deref().unwrap_or("Unknown");
-    let title = format!(" Booking - {} - {} ", location, app.availability_date);
+    let title = if app.availability_date.is_empty() {
+        format!(" Booking - {} ", location)
+    } else {
+        format!(" Booking - {} - {} ", location, app.availability_date)
+    };
     let block = Block::bordered()
         .title(title)
         .title_alignment(Alignment::Center)
@@ -367,6 +376,64 @@ fn render_spaces_panel(app: &mut App, frame: &mut Frame, area: Rect) {
         .highlight_symbol(">> ");
 
     frame.render_stateful_widget(list, area, &mut app.spaces_list_state);
+}
+
+fn render_date_picker_panel(app: &mut App, frame: &mut Frame, area: Rect) {
+    let focused = app.booking_focus == BookingFocus::DateSelection;
+    let border_style = if focused {
+        theme::focused_border()
+    } else {
+        theme::unfocused_border()
+    };
+
+    let today = Local::now().date_naive();
+
+    let items: Vec<ListItem> = app
+        .week_dates
+        .iter()
+        .map(|date| {
+            let date_str = date.format("%Y-%m-%d").to_string();
+            let date_label = if *date == today {
+                format!("Today, {}", date.format("%b %-d"))
+            } else {
+                date.format("%a, %b %-d").to_string()
+            };
+
+            let availability_info =
+                if let Some(slots) = app.week_availability.get(&date_str) {
+                    if slots.is_empty() {
+                        "fully booked".to_string()
+                    } else {
+                        let total_min = skedda::available_minutes(slots);
+                        if total_min >= 60 && total_min % 60 == 0 {
+                            format!("{}h available", total_min / 60)
+                        } else if total_min >= 60 {
+                            format!("{}h {}m available", total_min / 60, total_min % 60)
+                        } else {
+                            format!("{}m available", total_min)
+                        }
+                    }
+                } else {
+                    String::new()
+                };
+
+            let line = format!("  {:<16} {}", date_label, availability_info);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::bordered()
+                .title(" Select Date ")
+                .title_alignment(Alignment::Center)
+                .border_type(BorderType::Rounded)
+                .border_style(border_style),
+        )
+        .highlight_style(theme::selected_item())
+        .highlight_symbol(">> ");
+
+    frame.render_stateful_widget(list, area, &mut app.date_list_state);
 }
 
 fn render_timeslots_panel(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -513,9 +580,17 @@ fn render_booking_status(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("j/k", key_style),
             Span::styled(" navigate  ", desc_style),
             Span::styled("Tab/Enter", key_style),
-            Span::styled(" select times  ", desc_style),
+            Span::styled(" select date  ", desc_style),
             Span::styled("Esc", key_style),
             Span::styled(" back", desc_style),
+        ]),
+        BookingFocus::DateSelection => Line::from(vec![
+            Span::styled("j/k", key_style),
+            Span::styled(" navigate  ", desc_style),
+            Span::styled("Enter", key_style),
+            Span::styled(" select  ", desc_style),
+            Span::styled("Tab/Esc", key_style),
+            Span::styled(" spaces", desc_style),
         ]),
         BookingFocus::TimeSlots => Line::from(vec![
             Span::styled("j/k", key_style),
@@ -525,7 +600,7 @@ fn render_booking_status(app: &App, frame: &mut Frame, area: Rect) {
             Span::styled("Enter", key_style),
             Span::styled(" book  ", desc_style),
             Span::styled("Tab/Esc", key_style),
-            Span::styled(" spaces", desc_style),
+            Span::styled(" dates", desc_style),
         ]),
     };
     lines.push(help);

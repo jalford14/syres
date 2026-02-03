@@ -569,6 +569,22 @@ impl Skedda {
     }
 }
 
+/// Calculate total available minutes from a set of available slots.
+pub fn available_minutes(slots: &[AvailableSlot]) -> i64 {
+    slots
+        .iter()
+        .map(|slot| {
+            let start = NaiveTime::parse_from_str(&slot.start, "%H:%M")
+                .or_else(|_| NaiveTime::parse_from_str(&slot.start, "%H:%M:%S"))
+                .unwrap_or_default();
+            let end = NaiveTime::parse_from_str(&slot.end, "%H:%M")
+                .or_else(|_| NaiveTime::parse_from_str(&slot.end, "%H:%M:%S"))
+                .unwrap_or_default();
+            (end - start).num_minutes().max(0)
+        })
+        .sum()
+}
+
 /// Break available slots into 15-minute increments, each tagged with its block index.
 pub fn generate_time_increments(slots: &[AvailableSlot]) -> Vec<TimeIncrement> {
     let mut increments = Vec::new();
