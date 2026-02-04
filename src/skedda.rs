@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
-use chrono::NaiveTime;
+use chrono::{Local, NaiveTime};
 use reqwest::{
     blocking::Client,
     cookie::Jar,
     header::{HeaderMap, HeaderValue},
 };
 use scraper::{Html, Selector};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -382,6 +383,27 @@ impl Skedda {
         Ok(bookings)
     }
 
+    pub fn get_user_bookings(&mut self) -> Vec<Value> {
+        let webs_data = self.get_booking_data().unwrap();
+        let id = webs_data.get("web").unwrap().get("venueuser").and_then(Self::id_from_value);
+        let today = Local::now().date_naive();
+        // this needs to be more than one day
+        let date_str = today.format("%Y-%m-%d").to_string();
+        let bookings = self.fetch_bookings(&date_str).unwrap_or_default();
+        let mut user_bookings = Vec::new();
+
+        for booking in bookings {
+            match booking.get("venueuser") {
+                Some(value) if Self::id_from_value(value) == id => {
+                    user_bookings.push(booking.clone());
+                }
+                _ => {}
+            }
+        }
+
+        user_bookings
+    }
+
     /// Create a booking via POST /bookings.
     pub fn create_booking(
         &mut self,
@@ -389,7 +411,7 @@ impl Skedda {
         date: &str,
         start_time: &NaiveTime,
         end_time: &NaiveTime,
-        _title: &str,
+        title: &str,
     ) -> Result<()> {
         let csrf_token = self.get_booking_page()?;
         let url = format!("{}/bookings", self.base_url);
@@ -413,7 +435,7 @@ impl Skedda {
             "booking": {
                 "start": start,
                 "end": end,
-                "title": serde_json::Value::Null,
+                "title": title,
                 "venue": venue_id,
                 "venueuser": venue_user_id,
                 "spaces": [space_id.to_string()],
@@ -482,6 +504,48 @@ impl Skedda {
             }
         }
         anyhow::bail!("Booking failed (HTTP {status}): {response_text}");
+    }
+
+    pub fn delete_booking(&mut self, booking_id: &str) -> Result<()> {
+        let csrf_token = self.get_booking_page()?;
+        let url = format!("{}/bookings/{}", self.base_url, booking_id);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Skedda-RequestVerificationToken",
+            HeaderValue::from_str(&csrf_token)?,
+        );
+        headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+
+        let response = self
+            .client
+            .delete(&url)
+            .headers(headers)
+            .send()
+            .context("Failed to delete booking")?;
+
+        let status = response.status();
+        let response_text = response
+            .text()
+            .context("Failed to read booking response")?;
+
+        if status.is_success() {
+            self.cached_bookings.clear();
+            return Ok(());
+        }
+
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response_text) {
+            if let Some(errors) = json["errors"].as_array() {
+                let messages: Vec<&str> = errors
+                    .iter()
+                    .filter_map(|e| e["detail"].as_str())
+                    .collect();
+                if !messages.is_empty() {
+                    anyhow::bail!("{}", messages.join("; "));
+                }
+            }
+        }
+        anyhow::bail!("Canceling booking failed (HTTP {status}): {response_text}");
     }
 
     /// Calculate available time slots for a space by finding gaps in bookings.

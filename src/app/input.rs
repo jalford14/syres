@@ -1,184 +1,11 @@
-use std::collections::HashMap;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use chrono::{Local, NaiveDate, NaiveTime, TimeDelta};
-use crate::credentials::{self, Credentials};
-use crate::event::{AppEvent, Event, EventHandler};
-use crate::maps::{self, FloorMap};
-use crate::skedda::{self, AvailableSlot, Skedda, TimeIncrement};
-use crate::ui;
-
-use ratatui::{
-    DefaultTerminal,
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    widgets::{ListItem, ListState},
-};
-
-const LOCATIONS: [&str; 13] = [
-    "Adair Park",
-    "Avondale Estates",
-    "Buckhead",
-    "Cabbagetown",
-    "Chamblee",
-    "Decatur",
-    "Downtown",
-    "Midtown",
-    "Old Fourth Ward",
-    "Roswell",
-    "Virginia-Highland",
-    "Westside",
-    "Toco Hills",
-];
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ViewState {
-    Login,
-    LocationSelection,
-    BookingForm,
-    Confirmation,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum LoginMode {
-    EmailPassword,
-    SessionCookie,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum LoginField {
-    Username,
-    Password,
-    Cookie,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BookingFocus {
-    Spaces,
-    DateSelection,
-    TimeSlots,
-}
-
-/// Application.
-pub struct App<'a> {
-    pub running: bool,
-    pub locations: Vec<ListItem<'a>>,
-    pub events: EventHandler,
-    pub location_list_state: ListState,
-    pub spaces_list_state: ListState,
-    pub timeslots_list_state: ListState,
-    pub current_view: ViewState,
-    pub selected_location: Option<String>,
-    pub test_http: bool,
-    pub venue_space_ids: HashMap<String, String>,
-    pub selected_location_space_ids: Vec<String>,
-    pub available_slots: Vec<AvailableSlot>,
-    pub selected_space_id: Option<String>,
-    pub availability_date: String,
-    // Time slot selection
-    pub time_increments: Vec<TimeIncrement>,
-    pub booking_focus: BookingFocus,
-    pub selection_duration: usize,
-    pub week_dates: Vec<NaiveDate>,
-    pub week_availability: HashMap<String, Vec<AvailableSlot>>,
-    pub date_list_state: ListState,
-    pub booking_error: Option<String>,
-    // Login fields
-    pub login_mode: LoginMode,
-    pub username_input: String,
-    pub password_input: String,
-    pub cookie_input: String,
-    pub login_field_focus: LoginField,
-    pub auth_error: Option<String>,
-    // Persistent authenticated client
-    pub skedda: Option<Skedda>,
-    // Map data
-    pub floor_maps: Vec<FloorMap>,
-    pub floor_map_index: Option<usize>,
-}
-
-impl Default for App<'_> {
-    fn default() -> Self {
-        Self {
-            running: true,
-            locations: LOCATIONS
-                .iter()
-                .map(|&s| ListItem::new(s.to_string()))
-                .collect(),
-            events: EventHandler::new(),
-            location_list_state: ListState::default().with_selected(Some(0)),
-            spaces_list_state: ListState::default(),
-            timeslots_list_state: ListState::default(),
-            current_view: ViewState::Login,
-            selected_location: None,
-            test_http: false,
-            selected_location_space_ids: Vec::new(),
-            venue_space_ids: HashMap::new(),
-            available_slots: Vec::new(),
-            selected_space_id: None,
-            availability_date: String::new(),
-            time_increments: Vec::new(),
-            booking_focus: BookingFocus::Spaces,
-            selection_duration: 4,
-            week_dates: Vec::new(),
-            week_availability: HashMap::new(),
-            date_list_state: ListState::default(),
-            booking_error: None,
-            login_mode: LoginMode::EmailPassword,
-            username_input: String::new(),
-            password_input: String::new(),
-            cookie_input: String::new(),
-            login_field_focus: LoginField::Username,
-            auth_error: None,
-            skedda: None,
-            floor_maps: Vec::new(),
-            floor_map_index: None,
-        }
-    }
-}
+use super::{App, BookingFocus, LoginField, LoginMode, ViewState, LOCATIONS, MAIN_MENU_ITEMS};
+use crate::credentials;
+use crate::event::{AppEvent, Event};
+use crate::skedda::Skedda;
 
 impl App<'_> {
-    pub fn new() -> Self {
-        let mut app = Self::default();
-        app.floor_maps = maps::load_all_maps();
-
-        if let Ok(Some(creds)) = credentials::load_credentials() {
-            match creds {
-                Credentials::Password { username, password } => {
-                    if let Ok(mut skedda) = Skedda::new() {
-                        if skedda.authenticate(&username, &password).is_ok() {
-                            app.skedda = Some(skedda);
-                            app.current_view = ViewState::LocationSelection;
-                        } else {
-                            let _ = credentials::clear_credentials();
-                            app.current_view = ViewState::Login;
-                        }
-                    }
-                }
-                Credentials::Cookie { cookie } => {
-                    if let Ok(mut skedda) = Skedda::new() {
-                        if skedda.authenticate_with_cookie(&cookie).is_ok() {
-                            app.skedda = Some(skedda);
-                            app.current_view = ViewState::LocationSelection;
-                        } else {
-                            let _ = credentials::clear_credentials();
-                            app.current_view = ViewState::Login;
-                        }
-                    }
-                }
-            }
-        }
-
-        app
-    }
-
-    /// Run the application's main loop.
-    pub fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
-        while self.running {
-            terminal.draw(|frame| self.render(frame))?;
-            self.handle_events()?;
-        }
-        Ok(())
-    }
-
     pub fn handle_events(&mut self) -> color_eyre::Result<()> {
         match self.events.next()? {
             Event::Tick => self.tick(),
@@ -194,9 +21,7 @@ impl App<'_> {
         Ok(())
     }
 
-    /// Handles the key events and updates the state of [`App`].
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
-        // Ctrl+C always quits
         if key_event.code == KeyCode::Char('c') && key_event.modifiers == KeyModifiers::CONTROL {
             self.events.send(AppEvent::Quit);
             return Ok(());
@@ -212,6 +37,22 @@ impl App<'_> {
             self.handle_app_key(key_event)?;
         }
 
+        Ok(())
+    }
+
+    fn handle_paste(&mut self, text: String) -> color_eyre::Result<()> {
+        let trimmed = text.trim().to_string();
+        if self.current_view == ViewState::Login {
+            match self.login_field_focus {
+                LoginField::Username => self.username_input.push_str(&trimmed),
+                LoginField::Password => self.password_input.push_str(&trimmed),
+                LoginField::Cookie => self.cookie_input.push_str(&trimmed),
+            }
+        } else if self.current_view == ViewState::BookingForm
+            && self.booking_focus == BookingFocus::TitleInput
+        {
+            self.booking_title.push_str(&trimmed);
+        }
         Ok(())
     }
 
@@ -237,13 +78,11 @@ impl App<'_> {
         }
     }
 
-    /// Switch login mode and move focus to an appropriate field.
     fn switch_login_mode(&mut self) {
         self.login_mode = match self.login_mode {
             LoginMode::EmailPassword => LoginMode::SessionCookie,
             LoginMode::SessionCookie => LoginMode::EmailPassword,
         };
-        // Move focus to the first field in the new mode
         self.login_field_focus = match self.login_mode {
             LoginMode::EmailPassword => LoginField::Username,
             LoginMode::SessionCookie => LoginField::Cookie,
@@ -284,18 +123,6 @@ impl App<'_> {
                 self.submit_login()?;
             }
             _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_paste(&mut self, text: String) -> color_eyre::Result<()> {
-        if self.current_view == ViewState::Login {
-            let trimmed = text.trim().to_string();
-            match self.login_field_focus {
-                LoginField::Username => self.username_input.push_str(&trimmed),
-                LoginField::Password => self.password_input.push_str(&trimmed),
-                LoginField::Cookie => self.cookie_input.push_str(&trimmed),
-            }
         }
         Ok(())
     }
@@ -359,20 +186,151 @@ impl App<'_> {
 
     fn handle_app_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match self.current_view {
+            ViewState::MainMenu => self.handle_menu_key(key_event),
             ViewState::LocationSelection => self.handle_location_key(key_event),
+            ViewState::BookingManager => self.handle_manage_booking_key(key_event),
             ViewState::BookingForm => self.handle_booking_key(key_event),
             ViewState::Confirmation => self.handle_confirmation_key(key_event),
             ViewState::Login => Ok(()), // handled in handle_login_key
         }
     }
 
-    fn handle_location_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+    fn handle_menu_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.events.send(AppEvent::Quit);
             }
-            KeyCode::Char('t') => {
-                self.test_http = true;
+            KeyCode::Up | KeyCode::Char('k') => {
+                let len = self.main_menu_items.len();
+                let selected = self.main_menu_list_state.selected().unwrap_or(0);
+                let new = if selected == 0 {
+                    len.saturating_sub(1)
+                } else {
+                    selected.saturating_sub(1)
+                };
+                self.main_menu_list_state.select(Some(new));
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let len = self.main_menu_items.len();
+                let selected = self.main_menu_list_state.selected().unwrap_or(0);
+                let new = if selected >= len.saturating_sub(1) {
+                    0
+                } else {
+                    selected.saturating_add(1)
+                };
+                self.main_menu_list_state.select(Some(new));
+            }
+            KeyCode::Enter => {
+                if let Some(selected) = self.main_menu_list_state.selected() {
+                    match MAIN_MENU_ITEMS[selected] {
+                        "Create a booking" => {
+                            self.current_view = ViewState::LocationSelection;
+                        },
+                        "Manage bookings" => {
+                            if let Some(ref mut skedda) = self.skedda {
+                                skedda.fetch_space_ids();
+                                self.venue_space_ids = skedda.venue_space_ids.clone();
+                                self.user_bookings = skedda.get_user_bookings();
+                                self.user_booking_list_state.select(
+                                    if self.user_bookings.is_empty() { None } else { Some(0) }
+                                );
+                                self.current_view = ViewState::BookingManager;
+                            }
+                        },
+                        _ => todo!()
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_manage_booking_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        if self.confirm_delete {
+            match key_event.code {
+                KeyCode::Enter | KeyCode::Char('y') => {
+                    if let Some(selected) = self.user_booking_list_state.selected() {
+                        if let Some(booking) = self.user_bookings.get(selected) {
+                            let booking_id = booking
+                                .get("id")
+                                .and_then(|v| {
+                                    v.as_str()
+                                        .map(String::from)
+                                        .or_else(|| v.as_i64().map(|n| n.to_string()))
+                                });
+
+                            if let Some(id) = booking_id {
+                                if let Some(ref mut skedda) = self.skedda {
+                                    match skedda.delete_booking(&id) {
+                                        Ok(()) => {
+                                            self.user_bookings = skedda.get_user_bookings();
+                                            if self.user_bookings.is_empty() {
+                                                self.user_booking_list_state.select(None);
+                                            } else {
+                                                let new_sel =
+                                                    selected.min(self.user_bookings.len() - 1);
+                                                self.user_booking_list_state
+                                                    .select(Some(new_sel));
+                                            }
+                                            self.booking_error = None;
+                                        }
+                                        Err(e) => {
+                                            self.booking_error = Some(e.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.confirm_delete = false;
+                }
+                KeyCode::Esc | KeyCode::Char('n') => {
+                    self.confirm_delete = false;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        match key_event.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.confirm_delete = false;
+                self.current_view = ViewState::MainMenu;
+                self.booking_error = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let len = self.user_bookings.len();
+                if len > 0 {
+                    let selected = self.user_booking_list_state.selected().unwrap_or(0);
+                    let new = if selected == 0 { len - 1 } else { selected - 1 };
+                    self.user_booking_list_state.select(Some(new));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let len = self.user_bookings.len();
+                if len > 0 {
+                    let selected = self.user_booking_list_state.selected().unwrap_or(0);
+                    let new = if selected >= len - 1 { 0 } else { selected + 1 };
+                    self.user_booking_list_state.select(Some(new));
+                }
+            }
+            KeyCode::Enter => {
+                if self.user_booking_list_state.selected().is_some() {
+                    self.confirm_delete = true;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_location_key(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+        match key_event.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.current_view = ViewState::MainMenu;
+                self.selected_location = None;
+                self.booking_error = None;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let len = self.locations.len();
@@ -403,6 +361,7 @@ impl App<'_> {
                         self.selection_duration = 4;
                         self.booking_error = None;
                         self.availability_date = String::new();
+                        self.booking_title = String::new();
                         self.initialize_week_dates();
 
                         if let Some(ref mut skedda) = self.skedda {
@@ -535,7 +494,8 @@ impl App<'_> {
                     self.clamp_duration();
                 }
                 KeyCode::Enter => {
-                    self.submit_booking();
+                    self.booking_title = String::new();
+                    self.booking_focus = BookingFocus::TitleInput;
                 }
                 KeyCode::Esc | KeyCode::Tab => {
                     self.booking_focus = BookingFocus::DateSelection;
@@ -544,6 +504,21 @@ impl App<'_> {
                     self.current_view = ViewState::LocationSelection;
                     self.selected_location = None;
                     self.booking_error = None;
+                }
+                _ => {}
+            },
+            BookingFocus::TitleInput => match key_event.code {
+                KeyCode::Char(c) => {
+                    self.booking_title.push(c);
+                }
+                KeyCode::Backspace => {
+                    self.booking_title.pop();
+                }
+                KeyCode::Enter => {
+                    self.submit_booking();
+                }
+                KeyCode::Esc => {
+                    self.booking_focus = BookingFocus::TimeSlots;
                 }
                 _ => {}
             },
@@ -560,137 +535,5 @@ impl App<'_> {
             _ => {}
         }
         Ok(())
-    }
-
-    /// Set up the week dates starting from today.
-    fn initialize_week_dates(&mut self) {
-        let today = Local::now().date_naive();
-        self.week_dates = (0..7)
-            .map(|i| today + TimeDelta::days(i))
-            .collect();
-        self.date_list_state.select(Some(0));
-    }
-
-    /// Recalculate weekly availability for the currently selected space.
-    fn recalculate_availability(&mut self) {
-        if let Some(selected_idx) = self.spaces_list_state.selected() {
-            if let Some(space_id) = self.selected_location_space_ids.get(selected_idx).cloned() {
-                self.selected_space_id = Some(space_id.clone());
-                self.week_availability.clear();
-
-                if let Some(ref mut skedda) = self.skedda {
-                    for date in &self.week_dates {
-                        let date_str = date.format("%Y-%m-%d").to_string();
-                        let bookings = skedda.fetch_bookings(&date_str).unwrap_or_default();
-                        let slots =
-                            Skedda::calculate_availability(&space_id, &date_str, &bookings);
-                        self.week_availability.insert(date_str, slots);
-                    }
-                }
-
-                // Clear time slot state — user must pick a date first
-                self.available_slots.clear();
-                self.time_increments.clear();
-                self.timeslots_list_state.select(None);
-            }
-        }
-    }
-
-    /// Select a date from the week picker and populate time slots.
-    fn select_date(&mut self) {
-        if let Some(selected) = self.date_list_state.selected() {
-            if let Some(date) = self.week_dates.get(selected) {
-                let date_str = date.format("%Y-%m-%d").to_string();
-                self.availability_date = date_str.clone();
-
-                self.available_slots = self
-                    .week_availability
-                    .get(&date_str)
-                    .cloned()
-                    .unwrap_or_default();
-
-                self.time_increments = skedda::generate_time_increments(&self.available_slots);
-
-                if self.time_increments.is_empty() {
-                    self.timeslots_list_state.select(None);
-                } else {
-                    self.timeslots_list_state.select(Some(0));
-                    self.selection_duration = 4;
-                }
-                self.clamp_duration();
-                self.booking_focus = BookingFocus::TimeSlots;
-            }
-        }
-    }
-
-    /// Ensure selection_duration doesn't cross block boundaries or exceed available slots.
-    fn clamp_duration(&mut self) {
-        if let Some(cursor) = self.timeslots_list_state.selected() {
-            if cursor < self.time_increments.len() {
-                let current_block = self.time_increments[cursor].block_index;
-                let max_in_block = self.time_increments[cursor..]
-                    .iter()
-                    .take_while(|inc| inc.block_index == current_block)
-                    .count();
-                if self.selection_duration > max_in_block {
-                    self.selection_duration = max_in_block;
-                }
-                if self.selection_duration < 1 {
-                    self.selection_duration = 1;
-                }
-            }
-        }
-    }
-
-    /// Compute the start and end NaiveTime of the current selection.
-    pub fn selected_time_range(&self) -> Option<(NaiveTime, NaiveTime)> {
-        let cursor = self.timeslots_list_state.selected()?;
-        let start_inc = self.time_increments.get(cursor)?;
-        let end_idx = cursor + self.selection_duration - 1;
-        let end_inc = self.time_increments.get(end_idx)?;
-        if end_inc.block_index != start_inc.block_index {
-            return None;
-        }
-        let start = start_inc.time;
-        let end = end_inc.time + TimeDelta::minutes(15);
-        Some((start, end))
-    }
-
-    /// Submit the booking via the API.
-    fn submit_booking(&mut self) {
-        self.booking_error = None;
-        if let Some((start_time, end_time)) = self.selected_time_range() {
-            let space_id = self.selected_space_id.clone().unwrap_or_default();
-            let date = self.availability_date.clone();
-            if let Some(ref mut skedda) = self.skedda {
-                match skedda.create_booking(&space_id, &date, &start_time, &end_time, "Booking") {
-                    Ok(()) => {
-                        self.current_view = ViewState::Confirmation;
-                    }
-                    Err(e) => {
-                        self.booking_error = Some(e.to_string());
-                    }
-                }
-            }
-        } else {
-            self.booking_error = Some("Invalid time selection".to_string());
-        }
-    }
-
-    pub fn current_floor_map(&self) -> Option<&FloorMap> {
-        self.floor_map_index.and_then(|i| self.floor_maps.get(i))
-    }
-
-    /// Handles the tick event of the terminal.
-    pub fn tick(&self) {}
-
-    /// Set running to false to quit the application.
-    pub fn quit(&mut self) {
-        self.running = false;
-    }
-
-    /// Renders the user interface.
-    pub fn render(&mut self, frame: &mut ratatui::Frame) {
-        ui::render(self, frame);
     }
 }
